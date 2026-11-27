@@ -57,7 +57,7 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 	if err := s.checkNamespace(ns); err != nil {
 		return 0, err
 	}
-	seq := s.lastSeq[ns] + 1
+	seq := s.logs[ns].lastSeq() + 1
 	ts := entry.Timestamp
 	if ts == 0 {
 		ts = time.Now().UnixNano()
@@ -85,11 +85,7 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 
 // LoadEntry reads an entry by namespace and sequence number.
 func (s *Store) LoadEntry(ns NamespaceID, seq uint64) (*StoredEntry, error) {
-	entries := s.entries[ns]
-	if entries == nil {
-		return nil, ErrNotFound
-	}
-	entry, ok := entries[seq]
+	entry, ok := s.logs[ns].get(seq)
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -105,9 +101,8 @@ func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq ui
 		return nil, ErrNotFound
 	}
 	var seen uint64
-	for seq := uint64(1); seq <= s.lastSeq[ns]; seq++ {
-		entry, ok := s.entries[ns][seq]
-		if !ok || entry.Subject != subject {
+	for entry := range s.logs[ns].ascending() {
+		if entry.Subject != subject {
 			continue
 		}
 		seen++
@@ -123,20 +118,19 @@ func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq ui
 
 // FirstSequence returns the lowest live sequence in a namespace.
 func (s *Store) FirstSequence(ns NamespaceID) (uint64, error) {
-	for seq := uint64(1); seq <= s.lastSeq[ns]; seq++ {
-		if _, ok := s.entries[ns][seq]; ok {
-			return seq, nil
-		}
+	if first := s.logs[ns].firstSeq(); first != 0 {
+		return first, nil
 	}
 	return 0, ErrNotFound
 }
 
 // LastSequence returns the highest assigned sequence in a namespace.
 func (s *Store) LastSequence(ns NamespaceID) (uint64, error) {
-	if s.lastSeq[ns] == 0 {
+	last := s.logs[ns].lastSeq()
+	if last == 0 {
 		return 0, ErrNotFound
 	}
-	return s.lastSeq[ns], nil
+	return last, nil
 }
 
 // RemoveEntry removes a single entry from a namespace.
@@ -144,7 +138,7 @@ func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
-	if _, ok := s.entries[ns][seq]; !ok {
+	if _, ok := s.logs[ns].get(seq); !ok {
 		return ErrNotFound
 	}
 	data := make([]byte, 16)
@@ -153,7 +147,7 @@ func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 	if err := s.journal.append(journalEntry{Type: journalTypeEntryRemove, Data: data}); err != nil {
 		return err
 	}
-	delete(s.entries[ns], seq)
+	s.logs[ns].remove(seq)
 	return nil
 }
 
@@ -166,7 +160,7 @@ func (s *Store) Purge(ns NamespaceID) (uint64, error) {
 	if err := s.checkNamespace(ns); err != nil {
 		return 0, err
 	}
-	if len(s.entries[ns]) == 0 {
+	if s.logs[ns].len() == 0 {
 		return 0, nil
 	}
 	data := make([]byte, 8)
@@ -174,7 +168,7 @@ func (s *Store) Purge(ns NamespaceID) (uint64, error) {
 	if err := s.journal.append(journalEntry{Type: journalTypeNamespacePurge, Data: data}); err != nil {
 		return 0, err
 	}
-	return s.applyPurgeUpTo(ns, math.MaxUint64), nil
+	return s.logs[ns].removeUpTo(math.MaxUint64), nil
 }
 
 // PurgeUpTo removes the entries with sequence numbers less than or equal to
@@ -186,14 +180,7 @@ func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 	if err := s.checkNamespace(ns); err != nil {
 		return 0, err
 	}
-	found := false
-	for cur := range s.entries[ns] {
-		if cur <= seq {
-			found = true
-			break
-		}
-	}
-	if !found {
+	if first := s.logs[ns].firstSeq(); first == 0 || first > seq {
 		return 0, nil
 	}
 	data := make([]byte, 16)
@@ -202,20 +189,7 @@ func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 	if err := s.journal.append(journalEntry{Type: journalTypeNamespacePurgeUpTo, Data: data}); err != nil {
 		return 0, err
 	}
-	return s.applyPurgeUpTo(ns, seq), nil
-}
-
-// applyPurgeUpTo removes the entries of ns up to seq and returns how many it
-// removed.
-func (s *Store) applyPurgeUpTo(ns NamespaceID, seq uint64) uint64 {
-	var n uint64
-	for cur := range s.entries[ns] {
-		if cur <= seq {
-			delete(s.entries[ns], cur)
-			n++
-		}
-	}
-	return n
+	return s.logs[ns].removeUpTo(seq), nil
 }
 
 // Sync commits pending writes to the underlying block device.
@@ -276,19 +250,17 @@ func (s *Store) applyRecord(entry journalEntry) error {
 		}
 		ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
 		seq := binary.LittleEndian.Uint64(entry.Data[8:])
-		if s.entries[ns] != nil {
-			delete(s.entries[ns], seq)
-		}
+		s.logs[ns].remove(seq)
 	case journalTypeNamespacePurge:
 		if len(entry.Data) < 8 {
 			return ErrCorrupt
 		}
-		s.applyPurgeUpTo(NamespaceID(binary.LittleEndian.Uint64(entry.Data)), math.MaxUint64)
+		s.logs[NamespaceID(binary.LittleEndian.Uint64(entry.Data))].removeUpTo(math.MaxUint64)
 	case journalTypeNamespacePurgeUpTo:
 		if len(entry.Data) < 16 {
 			return ErrCorrupt
 		}
-		s.applyPurgeUpTo(NamespaceID(binary.LittleEndian.Uint64(entry.Data)), binary.LittleEndian.Uint64(entry.Data[8:]))
+		s.logs[NamespaceID(binary.LittleEndian.Uint64(entry.Data))].removeUpTo(binary.LittleEndian.Uint64(entry.Data[8:]))
 	default:
 		return fmt.Errorf("%w: journal record type %d", ErrUnsupportedFormat, entry.Type)
 	}
@@ -296,13 +268,12 @@ func (s *Store) applyRecord(entry journalEntry) error {
 }
 
 func (s *Store) applyEntry(record entryRecord) {
-	if s.entries[record.Namespace] == nil {
-		s.entries[record.Namespace] = make(map[uint64]StoredEntry)
+	log := s.logs[record.Namespace]
+	if log == nil {
+		log = newEntryLog()
+		s.logs[record.Namespace] = log
 	}
-	s.entries[record.Namespace][record.Sequence] = record.StoredEntry
-	if record.Sequence > s.lastSeq[record.Namespace] {
-		s.lastSeq[record.Namespace] = record.Sequence
-	}
+	log.add(record.StoredEntry)
 }
 
 func encodeEntryRecord(record entryRecord) ([]byte, error) {

@@ -11,8 +11,7 @@ type Store struct {
 	namespaces map[NamespaceID]string
 	nsByName   map[string]NamespaceID
 	nextNS     NamespaceID
-	entries    map[NamespaceID]map[uint64]StoredEntry
-	lastSeq    map[NamespaceID]uint64
+	logs       map[NamespaceID]*entryLog
 	meta       map[NamespaceID]map[string][]byte
 	readOnly   bool
 }
@@ -89,8 +88,7 @@ func newStore(dev blkdev.BlockDevice, sb superblock, master masterNode) *Store {
 		namespaces: make(map[NamespaceID]string),
 		nsByName:   make(map[string]NamespaceID),
 		nextNS:     1,
-		entries:    make(map[NamespaceID]map[uint64]StoredEntry),
-		lastSeq:    make(map[NamespaceID]uint64),
+		logs:       make(map[NamespaceID]*entryLog),
 		meta:       make(map[NamespaceID]map[string][]byte),
 	}
 }

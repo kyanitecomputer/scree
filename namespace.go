@@ -93,8 +93,7 @@ func (s *Store) applyNamespaceDelete(id NamespaceID) {
 	name := s.namespaces[id]
 	delete(s.namespaces, id)
 	delete(s.nsByName, name)
-	delete(s.entries, id)
-	delete(s.lastSeq, id)
+	delete(s.logs, id)
 	delete(s.meta, id)
 }
 
