@@ -4,6 +4,14 @@
 **Date**: 2026-05-18
 **Target**: Bare-metal Go (TamaGo) on NOR flash (primary), NAND flash via Go Dhara port (secondary), eMMC (future)
 
+> **Note:** This is the design target. The prototype in this repository,
+> module `src.kyanite.computer/scree`, does not follow it yet: its superblock
+> is 40 bytes with the magic `"SCREE\x00\x01\x00"` and a CRC32 instead of an
+> HMAC, its only flag is authentication in bit 0, which `Format` and `Mount`
+> refuse until authentication is implemented, and entries live in the journal
+> and in memory, without an index or garbage collection. `layout.go`,
+> `master.go` and `journal.go` define the format it writes.
+
 ---
 
 ## 1. Overview
