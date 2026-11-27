@@ -6,11 +6,6 @@ import (
 	"sort"
 )
 
-const (
-	journalTypeMetaPut    = uint16(4)
-	journalTypeMetaDelete = uint16(5)
-)
-
 // PutMeta stores metadata for a namespace.
 func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 	s.mu.Lock()
@@ -31,7 +26,7 @@ func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := s.journal.append(journalEntry{Type: journalTypeMetaPut, Data: record}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordMetaPut, Data: record}); err != nil {
 		return err
 	}
 	s.applyMetaPut(ns, key, data)
@@ -92,7 +87,7 @@ func (s *Store) DeleteMeta(ns NamespaceID, key string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.journal.append(journalEntry{Type: journalTypeMetaDelete, Data: record}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordMetaDelete, Data: record}); err != nil {
 		return err
 	}
 	if s.meta[ns] != nil {

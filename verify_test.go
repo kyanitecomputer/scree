@@ -109,9 +109,9 @@ func TestVerifyDataDecodesAllRecords(t *testing.T) {
 		entry journalEntry
 		want  error
 	}{
-		{"short namespace", journalEntry{Type: journalTypeNamespaceCreate, Data: []byte{1, 2, 3}}, ErrCorrupt},
-		{"short meta", journalEntry{Type: journalTypeMetaPut, Data: []byte{1, 2, 3}}, ErrCorrupt},
-		{"short remove", journalEntry{Type: journalTypeEntryRemove, Data: []byte{1, 2, 3}}, ErrCorrupt},
+		{"short namespace", journalEntry{Type: recordNamespaceCreate, Data: []byte{1, 2, 3}}, ErrCorrupt},
+		{"short meta", journalEntry{Type: recordMetaPut, Data: []byte{1, 2, 3}}, ErrCorrupt},
+		{"short remove", journalEntry{Type: recordEntryRemove, Data: []byte{1, 2, 3}}, ErrCorrupt},
 		{"unknown type", journalEntry{Type: 0x7fff}, ErrUnsupportedFormat},
 	} {
 		t.Run(test.name, func(t *testing.T) {

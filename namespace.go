@@ -6,11 +6,6 @@ import (
 	"sort"
 )
 
-const (
-	journalTypeNamespaceCreate = uint16(2)
-	journalTypeNamespaceDelete = uint16(3)
-)
-
 // NamespaceEntry describes a namespace.
 type NamespaceEntry struct {
 	ID   NamespaceID
@@ -38,7 +33,7 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := s.journal.append(journalEntry{Type: journalTypeNamespaceCreate, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordNamespaceCreate, Data: data}); err != nil {
 		return 0, err
 	}
 	s.applyNamespaceCreate(id, name)
@@ -86,7 +81,7 @@ func (s *Store) DeleteNamespace(id NamespaceID) error {
 	}
 	data := make([]byte, 8)
 	binary.LittleEndian.PutUint64(data, uint64(id))
-	if err := s.journal.append(journalEntry{Type: journalTypeNamespaceDelete, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordNamespaceDelete, Data: data}); err != nil {
 		return err
 	}
 	s.applyNamespaceDelete(id)
