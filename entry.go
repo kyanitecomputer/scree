@@ -1,6 +1,7 @@
 package scree
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -11,9 +12,6 @@ import (
 // namespace, sequence and timestamp, and the lengths of the subject, header
 // and payload.
 const entryHeaderSize = 8 + 8 + 8 + 2 + 4 + 4
-
-// NamespaceID identifies a Scree namespace.
-type NamespaceID uint64
 
 // Entry represents data to append to a namespace.
 type Entry struct {
@@ -66,8 +64,8 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 		StoredEntry: StoredEntry{
 			Sequence:  seq,
 			Subject:   entry.Subject,
-			Header:    cloneBytes(entry.Header),
-			Payload:   cloneBytes(entry.Payload),
+			Header:    bytes.Clone(entry.Header),
+			Payload:   bytes.Clone(entry.Payload),
 			Timestamp: ts,
 		},
 	}
@@ -93,10 +91,7 @@ func (s *Store) LoadEntry(ns NamespaceID, seq uint64) (*StoredEntry, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	copy := entry
-	copy.Header = cloneBytes(entry.Header)
-	copy.Payload = cloneBytes(entry.Payload)
-	return &copy, nil
+	return entry.clone(), nil
 }
 
 // LoadEntryBySubject reads the subjectSeq-th entry for a subject.
@@ -116,10 +111,7 @@ func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq ui
 		}
 		seen++
 		if seen == subjectSeq {
-			copy := entry
-			copy.Header = cloneBytes(entry.Header)
-			copy.Payload = cloneBytes(entry.Payload)
-			return &copy, nil
+			return entry.clone(), nil
 		}
 	}
 	return nil, ErrNotFound
@@ -312,17 +304,15 @@ func decodeEntryRecord(data []byte) (entryRecord, error) {
 	end := pos + int(subjectLen+headerLen+payloadLen)
 	record.Subject = string(data[pos : pos+int(subjectLen)])
 	pos += int(subjectLen)
-	record.Header = cloneBytes(data[pos : pos+int(headerLen)])
+	record.Header = bytes.Clone(data[pos : pos+int(headerLen)])
 	pos += int(headerLen)
-	record.Payload = cloneBytes(data[pos:end])
+	record.Payload = bytes.Clone(data[pos:end])
 	return record, nil
 }
 
-func cloneBytes(src []byte) []byte {
-	if src == nil {
-		return nil
-	}
-	dst := make([]byte, len(src))
-	copy(dst, src)
-	return dst
+// clone returns a copy of e that shares no memory with it.
+func (e StoredEntry) clone() *StoredEntry {
+	e.Header = bytes.Clone(e.Header)
+	e.Payload = bytes.Clone(e.Payload)
+	return &e
 }

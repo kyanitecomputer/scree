@@ -1,10 +1,14 @@
 package scree
 
 import (
+	"cmp"
 	"encoding/binary"
 	"math"
-	"sort"
+	"slices"
 )
+
+// NamespaceID identifies a Scree namespace.
+type NamespaceID uint64
 
 // NamespaceEntry describes a namespace.
 type NamespaceEntry struct {
@@ -62,7 +66,7 @@ func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
 	for id, name := range s.namespaces {
 		entries = append(entries, NamespaceEntry{ID: id, Name: name})
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	slices.SortFunc(entries, func(a, b NamespaceEntry) int { return cmp.Compare(a.ID, b.ID) })
 	return entries, nil
 }
 
