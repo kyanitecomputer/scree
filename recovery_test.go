@@ -48,6 +48,47 @@ func TestPowerLossDuringAppendKeepsPriorEntries(t *testing.T) {
 	}
 }
 
+func TestTornAppendIsSkipped(t *testing.T) {
+	flash, dev := newFailureDevice(t)
+	if err := Format(dev, FormatOptions{}); err != nil {
+		t.Fatalf("Format() error = %v", err)
+	}
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	if _, err := store.Append(1, &Entry{Subject: "a", Payload: []byte("one"), Timestamp: 1}); err != nil {
+		t.Fatalf("Append(one) error = %v", err)
+	}
+	flash.TearAfterWrites(0, 16)
+	if _, err := store.Append(1, &Entry{Subject: "a", Payload: []byte("torn"), Timestamp: 2}); !errors.Is(err, testflash.ErrInjected) {
+		t.Fatalf("Append(torn) error = %v, want %v", err, testflash.ErrInjected)
+	}
+	flash.ClearFailures()
+
+	// The store goes on past the torn unit, and so does a remount.
+	if _, err := store.Append(1, &Entry{Subject: "a", Payload: []byte("two"), Timestamp: 3}); err != nil {
+		t.Fatalf("Append(two) error = %v", err)
+	}
+	reopened, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() reopened error = %v", err)
+	}
+	if _, err := reopened.Append(1, &Entry{Subject: "a", Payload: []byte("three"), Timestamp: 4}); err != nil {
+		t.Fatalf("Append(three) after remount error = %v", err)
+	}
+	reopened, err = Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() reopened again error = %v", err)
+	}
+	for seq, want := range map[uint64]string{1: "one", 2: "two", 3: "three"} {
+		entry, err := reopened.LoadEntry(1, seq)
+		if err != nil || string(entry.Payload) != want {
+			t.Fatalf("LoadEntry(%d) = %+v, %v, want %s", seq, entry, err, want)
+		}
+	}
+}
+
 func newFailureDevice(t *testing.T) (*testflash.NOR, blkdev.BlockDevice) {
 	t.Helper()
 	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0xff})

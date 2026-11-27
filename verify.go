@@ -19,15 +19,11 @@ func (s *Store) Verify(opts VerifyOptions) error {
 	if err := validateMaster(sb, master); err != nil {
 		return err
 	}
-	journal, err := openJournal(s.dev, sb)
+	entries, _, err := openJournal(s.dev, sb).replay()
 	if err != nil {
 		return err
 	}
 	if opts.CheckData {
-		entries, err := journal.replay()
-		if err != nil {
-			return err
-		}
 		for _, entry := range entries {
 			if entry.Type == journalTypeEntry {
 				if _, err := decodeEntryRecord(entry.Data); err != nil {

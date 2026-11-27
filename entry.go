@@ -192,7 +192,7 @@ func (s *Store) Sync() error {
 }
 
 func (s *Store) replayEntries() error {
-	entries, err := s.journal.replay()
+	entries, _, err := s.journal.replay()
 	if err != nil {
 		return err
 	}

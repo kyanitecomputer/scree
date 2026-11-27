@@ -72,15 +72,11 @@ func Mount(dev blkdev.BlockDevice, opts MountOptions) (*Store, error) {
 	if sb.Flags&superFlagAuth != 0 && len(opts.AuthKey) == 0 && opts.AuthFailureMode == AuthStrict {
 		return nil, ErrAuthenticationFailed
 	}
-	journal, err := openJournal(dev, sb)
-	if err != nil {
-		return nil, err
-	}
 	store := &Store{
 		dev:        dev,
 		super:      sb,
 		master:     master,
-		journal:    journal,
+		journal:    openJournal(dev, sb),
 		namespaces: make(map[NamespaceID]string),
 		nsByName:   make(map[string]NamespaceID),
 		nextNS:     1,
