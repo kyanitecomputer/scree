@@ -414,34 +414,110 @@ func subjectMatches(subject, filter string) bool {
 func msgSize(entry *scree.StoredEntry) uint64 {
 	return uint64(len(entry.Header) + len(entry.Payload))
 }
-func (s *streamStore) GetSeqFromTime(t time.Time) uint64 { return 0 }
 
-func (s *streamStore) FilteredState(seq uint64, subject string) (server.SimpleState, error) {
-	state := server.SimpleState{}
-	last, _ := s.store.LastSequence(s.ns)
-	for i := seq; i <= last; i++ {
-		entry, err := s.store.LoadEntry(s.ns, i)
-		if err != nil || (subject != "" && entry.Subject != subject) {
+// GetSeqFromTime returns the first sequence of a message stored at t or
+// later, or the sequence after the last if there is none.
+func (s *streamStore) GetSeqFromTime(t time.Time) uint64 {
+	ts := t.UnixNano()
+	for entry := range s.entries(0, math.MaxUint64) {
+		if entry.Timestamp >= ts {
+			return entry.Sequence
+		}
+	}
+	return s.lastSeq() + 1
+}
+
+// subjectStates returns the state of each subject that match selects, over
+// the messages from start on.
+func (s *streamStore) subjectStates(start uint64, match func(string) bool) map[string]server.SimpleState {
+	states := make(map[string]server.SimpleState)
+	for entry := range s.entries(start, math.MaxUint64) {
+		if !match(entry.Subject) {
 			continue
 		}
-		if state.First == 0 {
-			state.First = i
+		state := states[entry.Subject]
+		if state.Msgs == 0 {
+			state.First = entry.Sequence
 		}
-		state.Last = i
+		state.Last = entry.Sequence
 		state.Msgs++
+		states[entry.Subject] = state
 	}
-	return state, nil
+	return states
 }
 
-func (s *streamStore) SubjectsState(filterSubject string) map[string]server.SimpleState { return nil }
-func (s *streamStore) SubjectsTotals(filterSubject string) map[string]uint64            { return nil }
+// filterMatcher returns a match function for a subject filter.
+func filterMatcher(filter string) func(string) bool {
+	return func(subject string) bool { return subjectMatches(subject, filter) }
+}
+
+func (s *streamStore) FilteredState(seq uint64, subject string) (server.SimpleState, error) {
+	var total server.SimpleState
+	for _, state := range s.subjectStates(seq, filterMatcher(subject)) {
+		if total.Msgs == 0 || state.First < total.First {
+			total.First = state.First
+		}
+		total.Last = max(total.Last, state.Last)
+		total.Msgs += state.Msgs
+	}
+	return total, nil
+}
+
+func (s *streamStore) SubjectsState(filterSubject string) map[string]server.SimpleState {
+	states := s.subjectStates(0, filterMatcher(filterSubject))
+	if len(states) == 0 {
+		return nil
+	}
+	return states
+}
+
+func (s *streamStore) SubjectsTotals(filterSubject string) map[string]uint64 {
+	states := s.subjectStates(0, filterMatcher(filterSubject))
+	if len(states) == 0 {
+		return nil
+	}
+	totals := make(map[string]uint64, len(states))
+	for subject, state := range states {
+		totals[subject] = state.Msgs
+	}
+	return totals
+}
+
+// AllLastSeqs returns the last sequence of each subject, sorted.
 func (s *streamStore) AllLastSeqs() ([]uint64, error) {
-	last, _ := s.store.LastSequence(s.ns)
-	return []uint64{last}, nil
+	return lastSeqs(s.subjectStates(0, filterMatcher(fwcs))), nil
 }
+
+// MultiLastSeqs returns the last sequence up to maxSeq, or the stream's last
+// if it is zero, of each subject that matches one of filters, sorted.
 func (s *streamStore) MultiLastSeqs(filters []string, maxSeq uint64, maxAllowed int) ([]uint64, error) {
-	return nil, nil
+	if maxSeq == 0 {
+		maxSeq = math.MaxUint64
+	}
+	states := make(map[string]server.SimpleState)
+	for entry := range s.entries(0, maxSeq) {
+		if slices.ContainsFunc(filters, func(filter string) bool { return subjectMatches(entry.Subject, filter) }) {
+			states[entry.Subject] = server.SimpleState{Last: entry.Sequence}
+		}
+	}
+	if maxAllowed > 0 && len(states) > maxAllowed {
+		return nil, server.ErrTooManyResults
+	}
+	return lastSeqs(states), nil
 }
+
+func lastSeqs(states map[string]server.SimpleState) []uint64 {
+	if len(states) == 0 {
+		return nil
+	}
+	seqs := make([]uint64, 0, len(states))
+	for _, state := range states {
+		seqs = append(seqs, state.Last)
+	}
+	slices.Sort(seqs)
+	return seqs
+}
+
 func (s *streamStore) MultiLastMsgs(filters []string, minSeq, maxSeq uint64, maxAllowed int, cb func(sm *server.StoreMsg, np uint64) bool) (uint64, uint64, error) {
 	seqs, err := s.MultiLastSeqs(filters, maxSeq, maxAllowed)
 	if err != nil || len(seqs) == 0 {
@@ -467,16 +543,32 @@ func (s *streamStore) MultiLastMsgs(filters []string, minSeq, maxSeq uint64, max
 func (s *streamStore) SubjectForSeq(seq uint64) (string, error) {
 	e, err := s.store.LoadEntry(s.ns, seq)
 	if err != nil {
-		return "", err
+		return "", server.ErrStoreMsgNotFound
 	}
 	return e.Subject, nil
 }
+
+// NumPending returns the number of messages from sseq on that match filter,
+// or of their subjects if lastPerSubject, and the last sequence it is valid
+// through.
 func (s *streamStore) NumPending(sseq uint64, filter string, lastPerSubject bool) (uint64, uint64, error) {
-	st, err := s.FilteredState(sseq, filter)
-	return st.Msgs, st.Last, err
+	return s.numPending(sseq, filterMatcher(filter), lastPerSubject)
 }
+
 func (s *streamStore) NumPendingMulti(sseq uint64, sl *gsl.SimpleSublist, lastPerSubject bool) (uint64, uint64, error) {
-	return s.NumPending(sseq, "", lastPerSubject)
+	return s.numPending(sseq, sl.HasInterest, lastPerSubject)
+}
+
+func (s *streamStore) numPending(sseq uint64, match func(string) bool, lastPerSubject bool) (uint64, uint64, error) {
+	states := s.subjectStates(sseq, match)
+	if lastPerSubject {
+		return uint64(len(states)), s.lastSeq(), nil
+	}
+	var total uint64
+	for _, state := range states {
+		total += state.Msgs
+	}
+	return total, s.lastSeq(), nil
 }
 
 func (s *streamStore) State() server.StreamState {

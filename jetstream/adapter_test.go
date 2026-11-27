@@ -272,3 +272,51 @@ func TestStreamStoreLoadByFilter(t *testing.T) {
 		t.Fatalf("LoadPrevMsgMulti(3) = %d, %v, want 2, nil", seq, err)
 	}
 }
+
+func TestStreamStoreSubjectState(t *testing.T) {
+	store := newTestStreamStore(t)
+	if seqs, err := store.AllLastSeqs(); err != nil || seqs != nil {
+		t.Fatalf("AllLastSeqs() of an empty stream = %v, %v, want nil, nil", seqs, err)
+	}
+	storeTestMsgs(t, store, "a.1", "b", "a.2", "a.1", "b")
+
+	if seqs, err := store.AllLastSeqs(); err != nil || !slices.Equal(seqs, []uint64{3, 4, 5}) {
+		t.Fatalf("AllLastSeqs() = %v, %v, want [3 4 5], nil", seqs, err)
+	}
+	if seqs, err := store.MultiLastSeqs([]string{"a.*"}, 3, 0); err != nil || !slices.Equal(seqs, []uint64{1, 3}) {
+		t.Fatalf("MultiLastSeqs(a.*, 3) = %v, %v, want [1 3], nil", seqs, err)
+	}
+	if _, err := store.MultiLastSeqs([]string{">"}, 0, 2); !errors.Is(err, server.ErrTooManyResults) {
+		t.Fatalf("MultiLastSeqs(>, max 2) error = %v, want %v", err, server.ErrTooManyResults)
+	}
+	state, err := store.FilteredState(2, "a.*")
+	if err != nil || state.Msgs != 2 || state.First != 3 || state.Last != 4 {
+		t.Fatalf("FilteredState(2, a.*) = %+v, %v, want 2 messages from 3 to 4", state, err)
+	}
+	if totals := store.SubjectsTotals("a.*"); len(totals) != 2 || totals["a.1"] != 2 || totals["a.2"] != 1 {
+		t.Fatalf("SubjectsTotals(a.*) = %v, want a.1: 2, a.2: 1", totals)
+	}
+	if states := store.SubjectsState(">"); len(states) != 3 || states["b"].First != 2 || states["b"].Last != 5 {
+		t.Fatalf("SubjectsState(>) = %v, want b from 2 to 5", states)
+	}
+	if total, last, err := store.NumPending(2, "a.*", false); err != nil || total != 2 || last != 5 {
+		t.Fatalf("NumPending(2, a.*) = %d, %d, %v, want 2, 5, nil", total, last, err)
+	}
+	if total, _, err := store.NumPending(1, ">", true); err != nil || total != 3 {
+		t.Fatalf("NumPending(1, >, last per subject) = %d, %v, want 3, nil", total, err)
+	}
+}
+
+func TestStreamStoreGetSeqFromTime(t *testing.T) {
+	store := newTestStreamStore(t)
+	for i, ts := range []int64{10, 20, 30} {
+		if err := store.StoreRawMsg("a", nil, nil, uint64(i+1), ts, 0, false); err != nil {
+			t.Fatalf("StoreRawMsg() error = %v", err)
+		}
+	}
+	for ts, want := range map[int64]uint64{5: 1, 20: 2, 25: 3, 31: 4} {
+		if got := store.GetSeqFromTime(time.Unix(0, ts)); got != want {
+			t.Fatalf("GetSeqFromTime(%d) = %d, want %d", ts, got, want)
+		}
+	}
+}
