@@ -109,3 +109,35 @@ func newTestDevice(t *testing.T) blkdev.BlockDevice {
 	}
 	return dev
 }
+
+func TestStreamStoreDelete(t *testing.T) {
+	dev := newTestDevice(t)
+	if err := scree.Format(dev, scree.FormatOptions{}); err != nil {
+		t.Fatalf("scree.Format() error = %v", err)
+	}
+	store, err := scree.Mount(dev, scree.MountOptions{})
+	if err != nil {
+		t.Fatalf("scree.Mount() error = %v", err)
+	}
+	ns, err := streamNamespace(store, &server.StreamConfig{Name: "TEST"})
+	if err != nil {
+		t.Fatalf("streamNamespace() error = %v", err)
+	}
+	ss := &streamStore{storage: server.StorageType(1000), store: store, ns: ns}
+	if _, _, err := ss.StoreMsg("foo", nil, []byte("x"), 0); err != nil {
+		t.Fatalf("StoreMsg() error = %v", err)
+	}
+	if err := ss.Delete(true); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if err := ss.Stop(); err != nil {
+		t.Fatalf("Stop() after Delete error = %v", err)
+	}
+	reopened, err := scree.Mount(dev, scree.MountOptions{})
+	if err != nil {
+		t.Fatalf("scree.Mount() reopened error = %v", err)
+	}
+	if _, ok, _ := reopened.LookupNamespace("TEST"); ok {
+		t.Fatal("namespace TEST still exists after Delete")
+	}
+}

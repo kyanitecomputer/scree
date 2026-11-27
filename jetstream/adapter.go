@@ -22,6 +22,8 @@ type Provider func(server.StreamStoreConfig) (Options, error)
 
 // Options configures a Scree-backed NATS stream store.
 type Options struct {
+	// Device holds the stream. The stream mounts it as a Scree store of its
+	// own, so no other stream or store may use it at the same time.
 	Device        blkdev.BlockDevice
 	Format        bool
 	FormatOptions scree.FormatOptions
@@ -47,22 +49,26 @@ func Register(storage server.StorageType, name string, provider Provider) error 
 		if err != nil {
 			return nil, err
 		}
-		name := "stream"
-		if cfg.StreamConfig != nil && cfg.StreamConfig.Name != "" {
-			name = cfg.StreamConfig.Name
-		}
-		ns, ok, err := store.LookupNamespace(name)
+		ns, err := streamNamespace(store, cfg.StreamConfig)
 		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			ns, err = store.CreateNamespace(name)
-			if err != nil {
-				return nil, err
-			}
+			return nil, errors.Join(err, store.Close())
 		}
 		return &streamStore{storage: storage, store: store, ns: ns}, nil
 	})
+}
+
+// streamNamespace returns the namespace of a stream, which it creates if
+// needed.
+func streamNamespace(store *scree.Store, cfg *server.StreamConfig) (scree.NamespaceID, error) {
+	nsName := "stream"
+	if cfg != nil && cfg.Name != "" {
+		nsName = cfg.Name
+	}
+	ns, ok, err := store.LookupNamespace(nsName)
+	if err != nil || ok {
+		return ns, err
+	}
+	return store.CreateNamespace(nsName)
 }
 
 // streamStore is a NATS stream in a Scree namespace. The Scree store locks
@@ -357,13 +363,21 @@ func (s *streamStore) RegisterProcessJetStreamMsg(cb server.ProcessJetStreamMsgH
 	s.process = cb
 }
 func (s *streamStore) UpdateConfig(cfg *server.StreamConfig) error { return nil }
+
+// Delete removes the stream's namespace and stops the store.
 func (s *streamStore) Delete(inline bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.store.Purge(s.ns)
-	return err
+	err := s.store.DeleteNamespace(s.ns)
+	s.mu.Unlock()
+	return errors.Join(err, s.Stop())
 }
-func (s *streamStore) Stop() error { return s.store.Close() }
+
+func (s *streamStore) Stop() error {
+	if err := s.store.Close(); err != nil && !errors.Is(err, scree.ErrClosed) {
+		return err
+	}
+	return nil
+}
 
 func (s *streamStore) ConsumerStore(name string, created time.Time, cfg *server.ConsumerConfig) (server.ConsumerStore, error) {
 	if name == "" || cfg == nil {
