@@ -156,7 +156,8 @@ func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 	return nil
 }
 
-// Purge removes all entries from a namespace.
+// Purge removes all entries from a namespace. The next entry gets the
+// sequence after the last one assigned.
 func (s *Store) Purge(ns NamespaceID) error {
 	if s.readOnly {
 		return ErrReadOnly
@@ -170,7 +171,6 @@ func (s *Store) Purge(ns NamespaceID) error {
 		return err
 	}
 	s.entries[ns] = make(map[uint64]StoredEntry)
-	s.lastSeq[ns] = 0
 	return nil
 }
 
@@ -259,7 +259,6 @@ func (s *Store) applyRecord(entry journalEntry) error {
 		}
 		ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
 		s.entries[ns] = make(map[uint64]StoredEntry)
-		s.lastSeq[ns] = 0
 	default:
 		return fmt.Errorf("%w: journal record type %d", ErrUnsupportedFormat, entry.Type)
 	}

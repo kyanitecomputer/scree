@@ -77,3 +77,33 @@ func TestRetentionSurvivesRemount(t *testing.T) {
 		t.Fatalf("LoadEntry(2) = %+v, %v, want two", entry, err)
 	}
 }
+
+func TestPurgeKeepsSequence(t *testing.T) {
+	dev := newFormattedDevice(t, FormatOptions{})
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	ns := createNamespace(t, store, "test")
+	for range 2 {
+		if _, err := store.Append(ns, &Entry{Subject: "a"}); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+	if err := store.Purge(ns); err != nil {
+		t.Fatalf("Purge() error = %v", err)
+	}
+	if last, err := store.LastSequence(ns); err != nil || last != 2 {
+		t.Fatalf("LastSequence() = %d, %v, want 2, nil", last, err)
+	}
+	if seq, err := store.Append(ns, &Entry{Subject: "a"}); err != nil || seq != 3 {
+		t.Fatalf("Append() after purge = %d, %v, want 3, nil", seq, err)
+	}
+	reopened, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() reopened error = %v", err)
+	}
+	if seq, err := reopened.Append(ns, &Entry{Subject: "a"}); err != nil || seq != 4 {
+		t.Fatalf("Append() after remount = %d, %v, want 4, nil", seq, err)
+	}
+}
