@@ -83,10 +83,11 @@ func (j *journal) replay() ([]journalEntry, error) {
 		if binary.LittleEndian.Uint16(buf[journalOffsetMagic:]) != journalMagic {
 			return entries, nil
 		}
-		length := int(binary.LittleEndian.Uint32(buf[journalOffsetLength:]))
-		if length < 0 || length > j.writeUnit-journalOffsetData {
+		length32 := binary.LittleEndian.Uint32(buf[journalOffsetLength:])
+		if uint64(length32) > uint64(j.writeUnit-journalOffsetData) {
 			return entries, nil
 		}
+		length := int(length32)
 		want := binary.LittleEndian.Uint32(buf[journalOffsetCRC:])
 		got := journalCRC(buf, length)
 		if got != want {

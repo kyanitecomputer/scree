@@ -2,6 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 )
 
@@ -18,7 +19,10 @@ func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 	if key == "" {
 		return ErrInvalidArgument
 	}
-	record := encodeMetaRecord(ns, key, data)
+	record, err := encodeMetaRecord(ns, key, data)
+	if err != nil {
+		return err
+	}
 	if err := s.journal.append(journalEntry{Type: journalTypeMetaPut, Data: record}); err != nil {
 		return err
 	}
@@ -58,7 +62,10 @@ func (s *Store) DeleteMeta(ns NamespaceID, key string) error {
 	if key == "" {
 		return ErrInvalidArgument
 	}
-	record := encodeMetaRecord(ns, key, nil)
+	record, err := encodeMetaRecord(ns, key, nil)
+	if err != nil {
+		return err
+	}
 	if err := s.journal.append(journalEntry{Type: journalTypeMetaDelete, Data: record}); err != nil {
 		return err
 	}
@@ -75,14 +82,17 @@ func (s *Store) applyMetaPut(ns NamespaceID, key string, data []byte) {
 	s.meta[ns][key] = cloneBytes(data)
 }
 
-func encodeMetaRecord(ns NamespaceID, key string, data []byte) []byte {
+func encodeMetaRecord(ns NamespaceID, key string, data []byte) ([]byte, error) {
+	if len(key) > math.MaxUint16 || uint64(len(data)) > math.MaxUint32 {
+		return nil, ErrInvalidArgument
+	}
 	record := make([]byte, 14+len(key)+len(data))
 	binary.LittleEndian.PutUint64(record, uint64(ns))
 	binary.LittleEndian.PutUint16(record[8:], uint16(len(key)))
 	binary.LittleEndian.PutUint32(record[10:], uint32(len(data)))
 	copy(record[14:], key)
 	copy(record[14+len(key):], data)
-	return record
+	return record, nil
 }
 
 func decodeMetaRecord(record []byte) (NamespaceID, string, []byte, error) {
@@ -90,11 +100,11 @@ func decodeMetaRecord(record []byte) (NamespaceID, string, []byte, error) {
 		return 0, "", nil, ErrCorrupt
 	}
 	keyLen := int(binary.LittleEndian.Uint16(record[8:]))
-	dataLen := int(binary.LittleEndian.Uint32(record[10:]))
-	end := 14 + keyLen + dataLen
-	if end > len(record) {
+	dataLen := uint64(binary.LittleEndian.Uint32(record[10:]))
+	if uint64(keyLen)+dataLen > uint64(len(record)-14) {
 		return 0, "", nil, ErrCorrupt
 	}
+	end := 14 + keyLen + int(dataLen)
 	key := string(record[14 : 14+keyLen])
 	data := cloneBytes(record[14+keyLen : end])
 	return NamespaceID(binary.LittleEndian.Uint64(record)), key, data, nil

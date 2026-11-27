@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -13,6 +14,11 @@ const (
 	journalTypeEntryRemove    = uint16(6)
 	journalTypeNamespacePurge = uint16(7)
 )
+
+// entryHeaderSize is the size of an entry record before its subject: the
+// namespace, sequence and timestamp, and the lengths of the subject, header
+// and payload.
+const entryHeaderSize = 8 + 8 + 8 + 2 + 4 + 4
 
 // NamespaceID identifies a Scree namespace.
 type NamespaceID uint64
@@ -257,10 +263,10 @@ func (s *Store) applyEntry(record entryRecord) {
 }
 
 func encodeEntryRecord(record entryRecord) ([]byte, error) {
-	if len(record.Subject) > 1<<16-1 {
+	if len(record.Subject) > math.MaxUint16 || uint64(len(record.Header)) > math.MaxUint32 || uint64(len(record.Payload)) > math.MaxUint32 {
 		return nil, ErrInvalidArgument
 	}
-	buf := bytes.NewBuffer(make([]byte, 0, 32+len(record.Subject)+len(record.Header)+len(record.Payload)))
+	buf := bytes.NewBuffer(make([]byte, 0, entryHeaderSize+len(record.Subject)+len(record.Header)+len(record.Payload)))
 	write := func(v any) error { return binary.Write(buf, binary.LittleEndian, v) }
 	if err := write(uint64(record.Namespace)); err != nil {
 		return nil, fmt.Errorf("encode namespace: %w", err)
@@ -287,24 +293,24 @@ func encodeEntryRecord(record entryRecord) ([]byte, error) {
 }
 
 func decodeEntryRecord(data []byte) (entryRecord, error) {
-	if len(data) < 30 {
+	if len(data) < entryHeaderSize {
 		return entryRecord{}, ErrCorrupt
 	}
 	record := entryRecord{Namespace: NamespaceID(binary.LittleEndian.Uint64(data[0:]))}
 	record.Sequence = binary.LittleEndian.Uint64(data[8:])
 	record.Timestamp = int64(binary.LittleEndian.Uint64(data[16:]))
-	subjectLen := int(binary.LittleEndian.Uint16(data[24:]))
-	headerLen := int(binary.LittleEndian.Uint32(data[26:]))
-	payloadLen := int(binary.LittleEndian.Uint32(data[30:]))
-	pos := 34
-	end := pos + subjectLen + headerLen + payloadLen
-	if end > len(data) {
+	subjectLen := uint64(binary.LittleEndian.Uint16(data[24:]))
+	headerLen := uint64(binary.LittleEndian.Uint32(data[26:]))
+	payloadLen := uint64(binary.LittleEndian.Uint32(data[30:]))
+	if subjectLen+headerLen+payloadLen > uint64(len(data)-entryHeaderSize) {
 		return entryRecord{}, ErrCorrupt
 	}
-	record.Subject = string(data[pos : pos+subjectLen])
-	pos += subjectLen
-	record.Header = cloneBytes(data[pos : pos+headerLen])
-	pos += headerLen
+	pos := entryHeaderSize
+	end := pos + int(subjectLen+headerLen+payloadLen)
+	record.Subject = string(data[pos : pos+int(subjectLen)])
+	pos += int(subjectLen)
+	record.Header = cloneBytes(data[pos : pos+int(headerLen)])
+	pos += int(headerLen)
 	record.Payload = cloneBytes(data[pos:end])
 	return record, nil
 }

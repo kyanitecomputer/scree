@@ -2,6 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 )
 
@@ -29,7 +30,10 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 	}
 	id := s.nextNS
 	s.nextNS++
-	data := encodeNamespaceRecord(id, name)
+	data, err := encodeNamespaceRecord(id, name)
+	if err != nil {
+		return 0, err
+	}
 	if err := s.journal.append(journalEntry{Type: journalTypeNamespaceCreate, Data: data}); err != nil {
 		return 0, err
 	}
@@ -87,12 +91,15 @@ func (s *Store) applyNamespaceDelete(id NamespaceID) {
 	delete(s.meta, id)
 }
 
-func encodeNamespaceRecord(id NamespaceID, name string) []byte {
+func encodeNamespaceRecord(id NamespaceID, name string) ([]byte, error) {
+	if len(name) > math.MaxUint16 {
+		return nil, ErrInvalidArgument
+	}
 	data := make([]byte, 10+len(name))
 	binary.LittleEndian.PutUint64(data, uint64(id))
 	binary.LittleEndian.PutUint16(data[8:], uint16(len(name)))
 	copy(data[10:], name)
-	return data
+	return data, nil
 }
 
 func decodeNamespaceRecord(data []byte) (NamespaceID, string, error) {
