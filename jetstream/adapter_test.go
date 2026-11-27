@@ -346,3 +346,37 @@ func TestStreamStoreFastStateResets(t *testing.T) {
 		t.Fatalf("FastState() after Purge = %+v, want empty from 5", st)
 	}
 }
+
+func TestConsumerStateIsCopied(t *testing.T) {
+	store := newTestStreamStore(t)
+	cs, err := store.ConsumerStore("c", time.Now(), &server.ConsumerConfig{})
+	if err != nil {
+		t.Fatalf("ConsumerStore() error = %v", err)
+	}
+	in := &server.ConsumerState{
+		Pending:     map[uint64]*server.Pending{1: {Sequence: 1, Timestamp: 1}},
+		Redelivered: map[uint64]uint64{1: 2},
+	}
+	if err := cs.ForceUpdate(in); err != nil {
+		t.Fatalf("ForceUpdate() error = %v", err)
+	}
+	in.Pending[1].Timestamp = 99
+	in.Redelivered[1] = 99
+	out, err := cs.State()
+	if err != nil {
+		t.Fatalf("State() error = %v", err)
+	}
+	if out.Pending[1].Timestamp != 1 || out.Redelivered[1] != 2 {
+		t.Fatalf("State() = %+v, changed with the caller's state", out)
+	}
+	out.Pending[2] = &server.Pending{}
+	if again, _ := cs.State(); len(again.Pending) != 1 {
+		t.Fatalf("State() has %d pending, changed with a returned state", len(again.Pending))
+	}
+}
+
+func TestStreamStoreSnapshotFails(t *testing.T) {
+	if _, err := newTestStreamStore(t).Snapshot(time.Second, true, true); err == nil {
+		t.Fatal("Snapshot() succeeded")
+	}
+}

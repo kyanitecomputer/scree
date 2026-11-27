@@ -2,7 +2,6 @@ package jetstream
 
 import (
 	"errors"
-	"io"
 	"iter"
 	"maps"
 	"math"
@@ -707,8 +706,11 @@ func (s *streamStore) Consumers() iter.Seq[server.ConsumerStore] {
 	return slices.Values(consumers)
 }
 
+// errNoSnapshots reports that the store cannot take snapshots.
+var errNoSnapshots = errors.New("jetstream: scree stores do not support snapshots")
+
 func (s *streamStore) Snapshot(deadline time.Duration, includeConsumers, checkMsgs bool) (*server.SnapshotResult, error) {
-	return &server.SnapshotResult{Reader: io.NopCloser(&emptyReader{}), State: s.State()}, nil
+	return nil, errNoSnapshots
 }
 func (s *streamStore) Utilization() (uint64, uint64, error) { return 0, 0, nil }
 func (s *streamStore) ResetState()                          {}
@@ -781,14 +783,14 @@ func (c *consumerStore) ForceUpdate(state *server.ConsumerState) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if state != nil {
-		c.state = *state
+		c.state = copyConsumerState(state)
 	}
 	return nil
 }
 func (c *consumerStore) State() (*server.ConsumerState, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	st := c.state
+	st := copyConsumerState(&c.state)
 	return &st, nil
 }
 func (c *consumerStore) BorrowState() (*server.ConsumerState, error) { return c.State() }
@@ -803,9 +805,22 @@ func (c *consumerStore) Delete() error {
 }
 func (c *consumerStore) StreamDelete() error { return c.Delete() }
 
-type emptyReader struct{}
-
-func (e *emptyReader) Read(p []byte) (int, error) { return 0, io.EOF }
+// copyConsumerState returns a copy of st that shares no maps or pending
+// entries with it.
+func copyConsumerState(st *server.ConsumerState) server.ConsumerState {
+	cp := *st
+	if st.Pending != nil {
+		cp.Pending = make(map[uint64]*server.Pending, len(st.Pending))
+		for seq, p := range st.Pending {
+			if p != nil {
+				p = &server.Pending{Sequence: p.Sequence, Timestamp: p.Timestamp}
+			}
+			cp.Pending[seq] = p
+		}
+	}
+	cp.Redelivered = maps.Clone(st.Redelivered)
+	return cp
+}
 
 func sortedSeqs(m map[uint64]scree.StoredEntry) []uint64 {
 	seqs := make([]uint64, 0, len(m))
