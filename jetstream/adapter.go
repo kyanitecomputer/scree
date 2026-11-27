@@ -572,28 +572,50 @@ func (s *streamStore) numPending(sseq uint64, match func(string) bool, lastPerSu
 }
 
 func (s *streamStore) State() server.StreamState {
-	var st server.StreamState
-	s.FastState(&st)
-	return st
+	return s.state(true)
 }
 
 func (s *streamStore) FastState(st *server.StreamState) {
-	first, _ := s.store.FirstSequence(s.ns)
-	last, _ := s.store.LastSequence(s.ns)
-	st.FirstSeq = first
-	st.LastSeq = last
-	for seq := first; first != 0 && seq <= last; seq++ {
-		entry, err := s.store.LoadEntry(s.ns, seq)
-		if err != nil {
-			continue
+	*st = s.state(false)
+}
+
+// state returns the state of the stream, with the list of interior deletes
+// if withDeleted.
+func (s *streamStore) state(withDeleted bool) server.StreamState {
+	var st server.StreamState
+	st.LastSeq = s.lastSeq()
+	subjects := make(map[string]struct{})
+	next := uint64(0)
+	for entry := range s.entries(0, math.MaxUint64) {
+		if st.Msgs == 0 {
+			st.FirstSeq = entry.Sequence
+			st.FirstTime = time.Unix(0, entry.Timestamp).UTC()
+		} else if withDeleted {
+			for seq := next; seq < entry.Sequence; seq++ {
+				st.Deleted = append(st.Deleted, seq)
+			}
 		}
+		next = entry.Sequence + 1
 		st.Msgs++
-		st.Bytes += uint64(len(entry.Header) + len(entry.Payload))
-		if st.FirstTime.IsZero() {
-			st.FirstTime = time.Unix(0, entry.Timestamp)
-		}
-		st.LastTime = time.Unix(0, entry.Timestamp)
+		st.Bytes += msgSize(entry)
+		st.LastTime = time.Unix(0, entry.Timestamp).UTC()
+		subjects[entry.Subject] = struct{}{}
 	}
+	if st.Msgs == 0 {
+		if st.LastSeq > 0 {
+			st.FirstSeq = st.LastSeq + 1
+		}
+	} else {
+		st.NumDeleted = int(st.LastSeq - st.FirstSeq + 1 - st.Msgs)
+		for seq := next; withDeleted && seq <= st.LastSeq; seq++ {
+			st.Deleted = append(st.Deleted, seq)
+		}
+	}
+	st.NumSubjects = len(subjects)
+	s.mu.RLock()
+	st.Consumers = len(s.consumers)
+	s.mu.RUnlock()
+	return st
 }
 
 func (s *streamStore) EncodedStreamState(failed uint64, withSources bool) ([]byte, error) {

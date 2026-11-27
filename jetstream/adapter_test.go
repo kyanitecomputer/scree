@@ -320,3 +320,29 @@ func TestStreamStoreGetSeqFromTime(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamStoreFastStateResets(t *testing.T) {
+	store := newTestStreamStore(t)
+	storeTestMsgs(t, store, "a", "b", "a", "c")
+	if _, err := store.RemoveMsg(2); err != nil {
+		t.Fatalf("RemoveMsg(2) error = %v", err)
+	}
+	if _, err := store.RemoveMsg(4); err != nil {
+		t.Fatalf("RemoveMsg(4) error = %v", err)
+	}
+	st := server.StreamState{Msgs: 100, Bytes: 100, FirstTime: time.Unix(1, 0), NumDeleted: 7}
+	store.FastState(&st)
+	if st.Msgs != 2 || st.Bytes != 2 || st.FirstSeq != 1 || st.LastSeq != 4 || st.NumDeleted != 2 || st.NumSubjects != 1 {
+		t.Fatalf("FastState() = %+v, want 2 messages of 1 subject from 1 to 4, 2 deleted", st)
+	}
+	if state := store.State(); !slices.Equal(state.Deleted, []uint64{2, 4}) {
+		t.Fatalf("State().Deleted = %v, want [2 4]", state.Deleted)
+	}
+	if _, err := store.Purge(); err != nil {
+		t.Fatalf("Purge() error = %v", err)
+	}
+	store.FastState(&st)
+	if st.Msgs != 0 || st.Bytes != 0 || st.FirstSeq != 5 || st.LastSeq != 4 || !st.FirstTime.IsZero() {
+		t.Fatalf("FastState() after Purge = %+v, want empty from 5", st)
+	}
+}
