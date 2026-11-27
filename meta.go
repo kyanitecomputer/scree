@@ -1,14 +1,10 @@
 package scree
 
 import (
+	"bytes"
 	"encoding/binary"
 	"math"
-	"sort"
-)
-
-const (
-	journalTypeMetaPut    = uint16(4)
-	journalTypeMetaDelete = uint16(5)
+	"slices"
 )
 
 // PutMeta stores metadata for a namespace.
@@ -31,7 +27,7 @@ func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if err := s.journal.append(journalEntry{Type: journalTypeMetaPut, Data: record}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordMetaPut, Data: record}); err != nil {
 		return err
 	}
 	s.applyMetaPut(ns, key, data)
@@ -52,7 +48,7 @@ func (s *Store) GetMeta(ns NamespaceID, key string) ([]byte, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	return cloneBytes(data), nil
+	return bytes.Clone(data), nil
 }
 
 // MetaKeys returns the metadata keys stored in a namespace, sorted. It returns
@@ -68,7 +64,7 @@ func (s *Store) MetaKeys(ns NamespaceID) ([]string, error) {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys, nil
 }
 
@@ -92,7 +88,7 @@ func (s *Store) DeleteMeta(ns NamespaceID, key string) error {
 	if err != nil {
 		return err
 	}
-	if err := s.journal.append(journalEntry{Type: journalTypeMetaDelete, Data: record}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordMetaDelete, Data: record}); err != nil {
 		return err
 	}
 	if s.meta[ns] != nil {
@@ -105,7 +101,7 @@ func (s *Store) applyMetaPut(ns NamespaceID, key string, data []byte) {
 	if s.meta[ns] == nil {
 		s.meta[ns] = make(map[string][]byte)
 	}
-	s.meta[ns][key] = cloneBytes(data)
+	s.meta[ns][key] = bytes.Clone(data)
 }
 
 func encodeMetaRecord(ns NamespaceID, key string, data []byte) ([]byte, error) {
@@ -132,6 +128,6 @@ func decodeMetaRecord(record []byte) (NamespaceID, string, []byte, error) {
 	}
 	end := 14 + keyLen + int(dataLen)
 	key := string(record[14 : 14+keyLen])
-	data := cloneBytes(record[14+keyLen : end])
+	data := bytes.Clone(record[14+keyLen : end])
 	return NamespaceID(binary.LittleEndian.Uint64(record)), key, data, nil
 }

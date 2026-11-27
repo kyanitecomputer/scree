@@ -42,7 +42,7 @@ Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
 - Journal capacity is finite; writes return `ErrNoSpace` when reserved journal units are exhausted.
 - Authentication is not implemented yet: `Format` refuses `EnableAuth`, and `Mount` refuses volumes flagged as authenticated.
 - NAND support is defined at the driver interface level but does not have a block-device adapter yet.
-- The JetStream adapter is partial: consumer state stays in memory, the sourcing state of messages is not tracked, snapshots fail, encoded stream state and utilization are not reported, and subject queries walk the stream's entries. Each stream mounts its own device.
+- The JetStream adapter is partial: it does not enforce stream limits (messages, bytes, age, per subject) or discard policies, consumer state stays in memory, the sourcing state of messages is not tracked, snapshots fail, encoded stream state and utilization are not reported, and subject queries walk the stream's entries. Each stream mounts its own device.
 
 ## Packages
 

@@ -26,7 +26,7 @@ func TestValidate(t *testing.T) {
 	if err := Validate(testDevice{blockSize: 4096, blockCount: 2, writeSize: 256}); err != nil {
 		t.Fatalf("Validate() error = %v", err)
 	}
-	if err := Validate(testDevice{blockSize: 4096, blockCount: 2, writeSize: 300}); err != ErrInvalidGeometry {
+	if err := Validate(testDevice{blockSize: 4096, blockCount: 2, writeSize: 300}); !errors.Is(err, ErrInvalidGeometry) {
 		t.Fatalf("Validate() error = %v, want %v", err, ErrInvalidGeometry)
 	}
 }
@@ -36,10 +36,10 @@ func TestCheckWrite(t *testing.T) {
 	if err := CheckWrite(dev, 1, 256, 512); err != nil {
 		t.Fatalf("CheckWrite() error = %v", err)
 	}
-	if err := CheckWrite(dev, 2, 0, 256); err != ErrOutOfRange {
+	if err := CheckWrite(dev, 2, 0, 256); !errors.Is(err, ErrOutOfRange) {
 		t.Fatalf("CheckWrite() out of range error = %v, want %v", err, ErrOutOfRange)
 	}
-	if err := CheckWrite(dev, 0, 1, 256); err != ErrUnaligned {
+	if err := CheckWrite(dev, 0, 1, 256); !errors.Is(err, ErrUnaligned) {
 		t.Fatalf("CheckWrite() unaligned error = %v, want %v", err, ErrUnaligned)
 	}
 }

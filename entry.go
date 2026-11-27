@@ -8,22 +8,10 @@ import (
 	"time"
 )
 
-const journalTypeEntry = uint16(1)
-
-const (
-	journalTypeEntryRemove        = uint16(6)
-	journalTypeNamespacePurge     = uint16(7)
-	journalTypeNamespacePurgeUpTo = uint16(8)
-	journalTypeSetLastSequence    = uint16(9)
-)
-
 // entryHeaderSize is the size of an entry record before its subject: the
 // namespace, sequence and timestamp, and the lengths of the subject, header
 // and payload.
 const entryHeaderSize = 8 + 8 + 8 + 2 + 4 + 4
-
-// NamespaceID identifies a Scree namespace.
-type NamespaceID uint64
 
 // Entry represents data to append to a namespace.
 type Entry struct {
@@ -76,8 +64,8 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 		StoredEntry: StoredEntry{
 			Sequence:  seq,
 			Subject:   entry.Subject,
-			Header:    cloneBytes(entry.Header),
-			Payload:   cloneBytes(entry.Payload),
+			Header:    bytes.Clone(entry.Header),
+			Payload:   bytes.Clone(entry.Payload),
 			Timestamp: ts,
 		},
 	}
@@ -85,7 +73,7 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := s.journal.append(journalEntry{Type: journalTypeEntry, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordEntry, Data: data}); err != nil {
 		return 0, err
 	}
 	s.applyEntry(record)
@@ -103,10 +91,7 @@ func (s *Store) LoadEntry(ns NamespaceID, seq uint64) (*StoredEntry, error) {
 	if !ok {
 		return nil, ErrNotFound
 	}
-	copy := entry
-	copy.Header = cloneBytes(entry.Header)
-	copy.Payload = cloneBytes(entry.Payload)
-	return &copy, nil
+	return entry.clone(), nil
 }
 
 // LoadEntryBySubject reads the subjectSeq-th entry for a subject.
@@ -126,10 +111,7 @@ func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq ui
 		}
 		seen++
 		if seen == subjectSeq {
-			copy := entry
-			copy.Header = cloneBytes(entry.Header)
-			copy.Payload = cloneBytes(entry.Payload)
-			return &copy, nil
+			return entry.clone(), nil
 		}
 	}
 	return nil, ErrNotFound
@@ -178,7 +160,7 @@ func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 	data := make([]byte, 16)
 	binary.LittleEndian.PutUint64(data, uint64(ns))
 	binary.LittleEndian.PutUint64(data[8:], seq)
-	if err := s.journal.append(journalEntry{Type: journalTypeEntryRemove, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordEntryRemove, Data: data}); err != nil {
 		return err
 	}
 	s.logs[ns].remove(seq)
@@ -204,7 +186,7 @@ func (s *Store) Purge(ns NamespaceID) (uint64, error) {
 	}
 	data := make([]byte, 8)
 	binary.LittleEndian.PutUint64(data, uint64(ns))
-	if err := s.journal.append(journalEntry{Type: journalTypeNamespacePurge, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordNamespacePurge, Data: data}); err != nil {
 		return 0, err
 	}
 	return s.logs[ns].removeUpTo(math.MaxUint64), nil
@@ -230,7 +212,7 @@ func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 	data := make([]byte, 16)
 	binary.LittleEndian.PutUint64(data, uint64(ns))
 	binary.LittleEndian.PutUint64(data[8:], seq)
-	if err := s.journal.append(journalEntry{Type: journalTypeNamespacePurgeUpTo, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordNamespacePurgeUpTo, Data: data}); err != nil {
 		return 0, err
 	}
 	return s.logs[ns].removeUpTo(seq), nil
@@ -257,7 +239,7 @@ func (s *Store) SetLastSequence(ns NamespaceID, seq uint64) (uint64, error) {
 	data := make([]byte, 16)
 	binary.LittleEndian.PutUint64(data, uint64(ns))
 	binary.LittleEndian.PutUint64(data[8:], seq)
-	if err := s.journal.append(journalEntry{Type: journalTypeSetLastSequence, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordSetLastSequence, Data: data}); err != nil {
 		return 0, err
 	}
 	return s.logFor(ns).setLast(seq), nil
@@ -271,81 +253,6 @@ func (s *Store) Sync() error {
 		return ErrClosed
 	}
 	return s.dev.Sync()
-}
-
-func (s *Store) replayEntries() error {
-	entries, _, err := s.journal.replay()
-	if err != nil {
-		return err
-	}
-	for _, entry := range entries {
-		if err := s.applyRecord(entry); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// applyRecord applies a journal record to the in-memory state.
-func (s *Store) applyRecord(entry journalEntry) error {
-	switch entry.Type {
-	case journalTypeEntry:
-		record, err := decodeEntryRecord(entry.Data)
-		if err != nil {
-			return err
-		}
-		s.applyEntry(record)
-	case journalTypeNamespaceCreate:
-		id, name, err := decodeNamespaceRecord(entry.Data)
-		if err != nil {
-			return err
-		}
-		s.applyNamespaceCreate(id, name)
-	case journalTypeNamespaceDelete:
-		if len(entry.Data) < 8 {
-			return ErrCorrupt
-		}
-		s.applyNamespaceDelete(NamespaceID(binary.LittleEndian.Uint64(entry.Data)))
-	case journalTypeMetaPut:
-		ns, key, data, err := decodeMetaRecord(entry.Data)
-		if err != nil {
-			return err
-		}
-		s.applyMetaPut(ns, key, data)
-	case journalTypeMetaDelete:
-		ns, key, _, err := decodeMetaRecord(entry.Data)
-		if err != nil {
-			return err
-		}
-		if s.meta[ns] != nil {
-			delete(s.meta[ns], key)
-		}
-	case journalTypeEntryRemove:
-		if len(entry.Data) < 16 {
-			return ErrCorrupt
-		}
-		ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
-		seq := binary.LittleEndian.Uint64(entry.Data[8:])
-		s.logs[ns].remove(seq)
-	case journalTypeNamespacePurge:
-		if len(entry.Data) < 8 {
-			return ErrCorrupt
-		}
-		s.logs[NamespaceID(binary.LittleEndian.Uint64(entry.Data))].removeUpTo(math.MaxUint64)
-	case journalTypeSetLastSequence:
-		if len(entry.Data) < 16 {
-			return ErrCorrupt
-		}
-		s.logFor(NamespaceID(binary.LittleEndian.Uint64(entry.Data))).setLast(binary.LittleEndian.Uint64(entry.Data[8:]))
-	case journalTypeNamespacePurgeUpTo:
-		if len(entry.Data) < 16 {
-			return ErrCorrupt
-		}
-		s.logs[NamespaceID(binary.LittleEndian.Uint64(entry.Data))].removeUpTo(binary.LittleEndian.Uint64(entry.Data[8:]))
-	default:
-		return fmt.Errorf("%w: journal record type %d", ErrUnsupportedFormat, entry.Type)
-	}
-	return nil
 }
 
 func (s *Store) applyEntry(record entryRecord) {
@@ -366,30 +273,18 @@ func encodeEntryRecord(record entryRecord) ([]byte, error) {
 	if len(record.Subject) > math.MaxUint16 || uint64(len(record.Header)) > math.MaxUint32 || uint64(len(record.Payload)) > math.MaxUint32 {
 		return nil, ErrInvalidArgument
 	}
-	buf := bytes.NewBuffer(make([]byte, 0, entryHeaderSize+len(record.Subject)+len(record.Header)+len(record.Payload)))
-	write := func(v any) error { return binary.Write(buf, binary.LittleEndian, v) }
-	if err := write(uint64(record.Namespace)); err != nil {
-		return nil, fmt.Errorf("encode namespace: %w", err)
-	}
-	if err := write(record.Sequence); err != nil {
-		return nil, fmt.Errorf("encode sequence: %w", err)
-	}
-	if err := write(record.Timestamp); err != nil {
-		return nil, fmt.Errorf("encode timestamp: %w", err)
-	}
-	if err := write(uint16(len(record.Subject))); err != nil {
-		return nil, fmt.Errorf("encode subject length: %w", err)
-	}
-	if err := write(uint32(len(record.Header))); err != nil {
-		return nil, fmt.Errorf("encode header length: %w", err)
-	}
-	if err := write(uint32(len(record.Payload))); err != nil {
-		return nil, fmt.Errorf("encode payload length: %w", err)
-	}
-	buf.WriteString(record.Subject)
-	buf.Write(record.Header)
-	buf.Write(record.Payload)
-	return buf.Bytes(), nil
+	data := make([]byte, entryHeaderSize+len(record.Subject)+len(record.Header)+len(record.Payload))
+	binary.LittleEndian.PutUint64(data[0:], uint64(record.Namespace))
+	binary.LittleEndian.PutUint64(data[8:], record.Sequence)
+	binary.LittleEndian.PutUint64(data[16:], uint64(record.Timestamp))
+	binary.LittleEndian.PutUint16(data[24:], uint16(len(record.Subject)))
+	binary.LittleEndian.PutUint32(data[26:], uint32(len(record.Header)))
+	binary.LittleEndian.PutUint32(data[30:], uint32(len(record.Payload)))
+	pos := entryHeaderSize
+	pos += copy(data[pos:], record.Subject)
+	pos += copy(data[pos:], record.Header)
+	copy(data[pos:], record.Payload)
+	return data, nil
 }
 
 func decodeEntryRecord(data []byte) (entryRecord, error) {
@@ -409,17 +304,15 @@ func decodeEntryRecord(data []byte) (entryRecord, error) {
 	end := pos + int(subjectLen+headerLen+payloadLen)
 	record.Subject = string(data[pos : pos+int(subjectLen)])
 	pos += int(subjectLen)
-	record.Header = cloneBytes(data[pos : pos+int(headerLen)])
+	record.Header = bytes.Clone(data[pos : pos+int(headerLen)])
 	pos += int(headerLen)
-	record.Payload = cloneBytes(data[pos:end])
+	record.Payload = bytes.Clone(data[pos:end])
 	return record, nil
 }
 
-func cloneBytes(src []byte) []byte {
-	if src == nil {
-		return nil
-	}
-	dst := make([]byte, len(src))
-	copy(dst, src)
-	return dst
+// clone returns a copy of e that shares no memory with it.
+func (e StoredEntry) clone() *StoredEntry {
+	e.Header = bytes.Clone(e.Header)
+	e.Payload = bytes.Clone(e.Payload)
+	return &e
 }

@@ -6,7 +6,6 @@ import (
 	"maps"
 	"math"
 	"slices"
-	"sort"
 	"sync"
 	"time"
 
@@ -82,7 +81,6 @@ type streamStore struct {
 	ns        scree.NamespaceID
 	updates   server.StorageUpdateHandler
 	removes   server.StorageRemoveMsgHandler
-	process   server.ProcessJetStreamMsgHandler
 	consumers []server.ConsumerStore
 	sources   map[string]server.StreamSourceState
 }
@@ -652,12 +650,12 @@ func (s *streamStore) RegisterStorageRemoveMsg(cb server.StorageRemoveMsgHandler
 	defer s.mu.Unlock()
 	s.removes = cb
 }
-func (s *streamStore) RegisterProcessJetStreamMsg(cb server.ProcessJetStreamMsgHandler) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.process = cb
-}
-func (s *streamStore) UpdateConfig(cfg *server.StreamConfig) error { return nil }
+
+// RegisterProcessJetStreamMsg ignores cb: the store neither expires messages
+// with delete markers nor runs message schedules, which hand messages back to
+// the stream through it.
+func (s *streamStore) RegisterProcessJetStreamMsg(cb server.ProcessJetStreamMsgHandler) {}
+func (s *streamStore) UpdateConfig(cfg *server.StreamConfig) error                      { return nil }
 
 // Delete removes the stream's namespace and stops the store.
 func (s *streamStore) Delete(inline bool) error {
@@ -820,13 +818,4 @@ func copyConsumerState(st *server.ConsumerState) server.ConsumerState {
 	}
 	cp.Redelivered = maps.Clone(st.Redelivered)
 	return cp
-}
-
-func sortedSeqs(m map[uint64]scree.StoredEntry) []uint64 {
-	seqs := make([]uint64, 0, len(m))
-	for seq := range m {
-		seqs = append(seqs, seq)
-	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
-	return seqs
 }

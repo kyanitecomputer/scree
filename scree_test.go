@@ -7,19 +7,8 @@ import (
 
 	"src.kyanite.computer/scree/blkdev"
 	"src.kyanite.computer/scree/driver"
-	"src.kyanite.computer/scree/internal/testflash"
+	"src.kyanite.computer/scree/internal/testdev"
 )
-
-type noopDevice struct{}
-
-func (noopDevice) BlockSize() int                 { return 4096 }
-func (noopDevice) BlockCount() int                { return 16 }
-func (noopDevice) WriteSize() int                 { return 256 }
-func (noopDevice) ReadAt(int, int, []byte) error  { return nil }
-func (noopDevice) WriteAt(int, int, []byte) error { return nil }
-func (noopDevice) EraseBlock(int) error           { return nil }
-func (noopDevice) Sync() error                    { return nil }
-func (noopDevice) Close() error                   { return nil }
 
 func TestMountReadOnly(t *testing.T) {
 	dev := newFormattedDevice(t, FormatOptions{})
@@ -101,14 +90,7 @@ func TestNilDevice(t *testing.T) {
 
 func newDevice(t *testing.T) blkdev.BlockDevice {
 	t.Helper()
-	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0xff})
-	if err != nil {
-		t.Fatalf("testflash.NewNOR() error = %v", err)
-	}
-	dev, err := blkdev.NewNOR(flash)
-	if err != nil {
-		t.Fatalf("blkdev.NewNOR() error = %v", err)
-	}
+	_, dev := testdev.New(t)
 	return dev
 }
 
@@ -123,14 +105,9 @@ func newFormattedDevice(t *testing.T, opts FormatOptions) blkdev.BlockDevice {
 
 func TestSmallWriteSize(t *testing.T) {
 	for _, pageSize := range []int{1, 8, 32} {
-		flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: pageSize, EraseValue: 0xff})
-		if err != nil {
-			t.Fatalf("testflash.NewNOR() error = %v", err)
-		}
-		dev, err := blkdev.NewNOR(flash)
-		if err != nil {
-			t.Fatalf("blkdev.NewNOR() error = %v", err)
-		}
+		geometry := testdev.Geometry
+		geometry.PageSize = pageSize
+		_, dev := testdev.NewGeometry(t, geometry)
 		if err := Format(dev, FormatOptions{}); err != nil {
 			t.Fatalf("Format(page %d) error = %v", pageSize, err)
 		}
@@ -153,14 +130,7 @@ func TestSmallWriteSize(t *testing.T) {
 }
 
 func TestBlockSmallerThanUnit(t *testing.T) {
-	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 32, EraseBlockSize: 32, PageSize: 32, EraseValue: 0xff})
-	if err != nil {
-		t.Fatalf("testflash.NewNOR() error = %v", err)
-	}
-	dev, err := blkdev.NewNOR(flash)
-	if err != nil {
-		t.Fatalf("blkdev.NewNOR() error = %v", err)
-	}
+	_, dev := testdev.NewGeometry(t, driver.Geometry{TotalSize: 16 * 32, EraseBlockSize: 32, PageSize: 32, EraseValue: 0xff})
 	if err := Format(dev, FormatOptions{}); !errors.Is(err, ErrUnsupportedFormat) {
 		t.Fatalf("Format() error = %v, want %v", err, ErrUnsupportedFormat)
 	}

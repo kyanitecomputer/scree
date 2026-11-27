@@ -73,7 +73,7 @@ func TestRetentionSurvivesRemount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() reopened error = %v", err)
 	}
-	if _, err := reopened.LoadEntry(ns, 1); err != ErrNotFound {
+	if _, err := reopened.LoadEntry(ns, 1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("LoadEntry(ns) error = %v, want %v", err, ErrNotFound)
 	}
 	entry, err := reopened.LoadEntry(ns, 2)

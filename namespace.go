@@ -1,15 +1,14 @@
 package scree
 
 import (
+	"cmp"
 	"encoding/binary"
 	"math"
-	"sort"
+	"slices"
 )
 
-const (
-	journalTypeNamespaceCreate = uint16(2)
-	journalTypeNamespaceDelete = uint16(3)
-)
+// NamespaceID identifies a Scree namespace.
+type NamespaceID uint64
 
 // NamespaceEntry describes a namespace.
 type NamespaceEntry struct {
@@ -38,7 +37,7 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := s.journal.append(journalEntry{Type: journalTypeNamespaceCreate, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordNamespaceCreate, Data: data}); err != nil {
 		return 0, err
 	}
 	s.applyNamespaceCreate(id, name)
@@ -67,7 +66,7 @@ func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
 	for id, name := range s.namespaces {
 		entries = append(entries, NamespaceEntry{ID: id, Name: name})
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	slices.SortFunc(entries, func(a, b NamespaceEntry) int { return cmp.Compare(a.ID, b.ID) })
 	return entries, nil
 }
 
@@ -86,7 +85,7 @@ func (s *Store) DeleteNamespace(id NamespaceID) error {
 	}
 	data := make([]byte, 8)
 	binary.LittleEndian.PutUint64(data, uint64(id))
-	if err := s.journal.append(journalEntry{Type: journalTypeNamespaceDelete, Data: data}); err != nil {
+	if err := s.journal.append(journalEntry{Type: recordNamespaceDelete, Data: data}); err != nil {
 		return err
 	}
 	s.applyNamespaceDelete(id)

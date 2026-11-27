@@ -78,7 +78,7 @@ type Compressor interface {
 
 ### 2.1 LZ4 (Default)
 
-LZ4 block compression. Pure Go implementation (`kyanite.computer/scree/compress/lz4`). Chosen for:
+LZ4 block compression. Pure Go implementation (`src.kyanite.computer/scree/compress/lz4`). Chosen for:
 
 - Decompression throughput: ~1 GB/s on Cortex-A7, ~3 GB/s on Cortex-A35
 - Zero-allocation decompression when dst is pre-allocated

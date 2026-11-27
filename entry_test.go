@@ -42,7 +42,7 @@ func TestAppendReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
-	if _, err := store.Append(1, &Entry{}); err != ErrReadOnly {
+	if _, err := store.Append(1, &Entry{}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("Append() error = %v, want %v", err, ErrReadOnly)
 	}
 }

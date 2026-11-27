@@ -3,6 +3,8 @@ package scree
 import (
 	"errors"
 	"testing"
+
+	"src.kyanite.computer/scree/internal/testdev"
 )
 
 func TestNamespaceCRUD(t *testing.T) {
@@ -62,7 +64,7 @@ func TestMetaRoundTrip(t *testing.T) {
 	if err := reopened.DeleteMeta(id, "consumer"); err != nil {
 		t.Fatalf("DeleteMeta() error = %v", err)
 	}
-	if _, err := reopened.GetMeta(id, "consumer"); err != ErrNotFound {
+	if _, err := reopened.GetMeta(id, "consumer"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("GetMeta() after delete error = %v, want %v", err, ErrNotFound)
 	}
 }
@@ -92,7 +94,7 @@ func TestWritesNeedNamespace(t *testing.T) {
 }
 
 func TestCreateNamespaceFailureKeepsID(t *testing.T) {
-	flash, dev := newFailureDevice(t)
+	flash, dev := testdev.New(t)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}

@@ -1,11 +1,10 @@
 package scree
 
 import (
+	"hash/crc32"
 	"testing"
 
-	"src.kyanite.computer/scree/blkdev"
-	"src.kyanite.computer/scree/driver"
-	"src.kyanite.computer/scree/internal/testflash"
+	"src.kyanite.computer/scree/internal/testdev"
 )
 
 func TestJournalAppendReplay(t *testing.T) {
@@ -70,14 +69,9 @@ func TestJournalSkipsCorruptEntry(t *testing.T) {
 }
 
 func TestJournalUsesEraseValue(t *testing.T) {
-	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0x00})
-	if err != nil {
-		t.Fatalf("testflash.NewNOR() error = %v", err)
-	}
-	dev, err := blkdev.NewNOR(flash)
-	if err != nil {
-		t.Fatalf("blkdev.NewNOR() error = %v", err)
-	}
+	geometry := testdev.Geometry
+	geometry.EraseValue = 0x00
+	_, dev := testdev.NewGeometry(t, geometry)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}
@@ -97,5 +91,22 @@ func TestJournalUsesEraseValue(t *testing.T) {
 	}
 	if err := reopened.Verify(VerifyOptions{CheckData: true}); err != nil {
 		t.Fatalf("Verify() error = %v", err)
+	}
+}
+
+func TestJournalCRC(t *testing.T) {
+	buf := make([]byte, 64)
+	for i := range buf {
+		buf[i] = byte(i * 7)
+	}
+	const length = 20
+	// The CRC covers the record from its type on, with a zero CRC field.
+	covered := append([]byte(nil), buf[journalOffsetType:journalOffsetData+length]...)
+	clear(covered[journalOffsetCRC-journalOffsetType : journalOffsetData-journalOffsetType])
+	if got, want := journalCRC(buf, length), crc32.ChecksumIEEE(covered); got != want {
+		t.Fatalf("journalCRC() = %#x, want %#x", got, want)
+	}
+	if n := testing.AllocsPerRun(10, func() { journalCRC(buf, length) }); n != 0 {
+		t.Fatalf("journalCRC() allocates %v times", n)
 	}
 }
