@@ -2,6 +2,8 @@ package jetstream
 
 import (
 	"errors"
+	"math"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -172,5 +174,66 @@ func TestStreamStoreRawAndSkip(t *testing.T) {
 	}
 	if state := store.State(); state.Msgs != 2 || state.FirstSeq != 1 || state.LastSeq != 7 {
 		t.Fatalf("State() = %+v, want 2 messages from 1 to 7", state)
+	}
+}
+
+// storeTestMsgs stores a message on each subject, in order.
+func storeTestMsgs(t *testing.T, store *streamStore, subjects ...string) {
+	t.Helper()
+	for _, subject := range subjects {
+		if _, _, err := store.StoreMsg(subject, nil, []byte("x"), 0); err != nil {
+			t.Fatalf("StoreMsg(%q) error = %v", subject, err)
+		}
+	}
+}
+
+func TestStreamStorePurgeCompactTruncate(t *testing.T) {
+	store := newTestStreamStore(t)
+	var msgs, bytes int64
+	store.RegisterStorageUpdates(func(m, b int64, _ uint64, _ string) { msgs += m; bytes += b })
+	storeTestMsgs(t, store, "a", "b", "a", "b", "a")
+
+	if n, err := store.Compact(3); err != nil || n != 2 {
+		t.Fatalf("Compact(3) = %d, %v, want 2, nil", n, err)
+	}
+	if err := store.Truncate(4); err != nil {
+		t.Fatalf("Truncate(4) error = %v", err)
+	}
+	if state := store.State(); state.Msgs != 2 || state.FirstSeq != 3 || state.LastSeq != 4 {
+		t.Fatalf("State() after Compact(3) and Truncate(4) = %+v, want 3 to 4", state)
+	}
+	if msgs != 2 || bytes != 2 {
+		t.Fatalf("updates = %d messages, %d bytes, want 2, 2", msgs, bytes)
+	}
+	if n, err := store.Purge(); err != nil || n != 2 {
+		t.Fatalf("Purge() = %d, %v, want 2, nil", n, err)
+	}
+	if n, err := store.Compact(10); err != nil || n != 0 {
+		t.Fatalf("Compact(10) = %d, %v, want 0, nil", n, err)
+	}
+	if seq, _, err := store.StoreMsg("a", nil, nil, 0); err != nil || seq != 10 {
+		t.Fatalf("StoreMsg() after Compact(10) = %d, %v, want 10, nil", seq, err)
+	}
+	if msgs != 1 {
+		t.Fatalf("updates = %d messages, want 1", msgs)
+	}
+}
+
+func TestStreamStorePurgeEx(t *testing.T) {
+	store := newTestStreamStore(t)
+	storeTestMsgs(t, store, "a.1", "b", "a.2", "a.1", "b", "a.3")
+
+	if n, err := store.PurgeEx("a.*", 0, 1); err != nil || n != 3 {
+		t.Fatalf("PurgeEx(a.*, keep 1) = %d, %v, want 3, nil", n, err)
+	}
+	if n, err := store.PurgeEx("b", 5, 0); err != nil || n != 1 {
+		t.Fatalf("PurgeEx(b, below 5) = %d, %v, want 1, nil", n, err)
+	}
+	var seqs []uint64
+	for entry := range store.entries(0, math.MaxUint64) {
+		seqs = append(seqs, entry.Sequence)
+	}
+	if !slices.Equal(seqs, []uint64{5, 6}) {
+		t.Fatalf("sequences after PurgeEx = %v, want [5 6]", seqs)
 	}
 }

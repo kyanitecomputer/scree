@@ -5,6 +5,7 @@ import (
 	"io"
 	"iter"
 	"maps"
+	"math"
 	"slices"
 	"sort"
 	"sync"
@@ -261,24 +262,140 @@ func (s *streamStore) RemoveMsg(seq uint64) (bool, error) {
 
 func (s *streamStore) EraseMsg(seq uint64) (bool, error) { return s.RemoveMsg(seq) }
 
+// Purge removes all messages and returns how many it removed.
 func (s *streamStore) Purge() (uint64, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.store.Purge(s.ns)
+	bytes := s.bytes(0, math.MaxUint64)
+	purged, err := s.store.Purge(s.ns)
+	cb := s.updates
+	s.mu.Unlock()
+	s.removed(cb, purged, bytes, 0, "")
+	return purged, err
 }
 
-func (s *streamStore) PurgeEx(subject string, seq, keep uint64) (uint64, error) { return s.Purge() }
-func (s *streamStore) Compact(seq uint64) (uint64, error) {
+// PurgeEx removes the messages on subject below seq, if not zero, but keeps
+// the last keep of them, and returns how many it removed.
+func (s *streamStore) PurgeEx(subject string, seq, keep uint64) (uint64, error) {
+	if seq == 1 {
+		return 0, nil
+	}
+	if subject == "" || subject == fwcs {
+		if keep == 0 && seq == 0 {
+			return s.Purge()
+		}
+		if seq > 1 {
+			return s.Compact(seq)
+		}
+		subject = fwcs
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.store.PurgeUpTo(s.ns, seq)
-	return seq, err
+	var matching []*scree.StoredEntry
+	for entry := range s.entries(0, math.MaxUint64) {
+		if subjectMatches(entry.Subject, subject) {
+			matching = append(matching, entry)
+		}
+	}
+	if keep >= uint64(len(matching)) {
+		matching = nil
+	} else {
+		matching = matching[:uint64(len(matching))-keep]
+	}
+	var purged, bytes uint64
+	var err error
+	for _, entry := range matching {
+		if seq > 0 && entry.Sequence >= seq {
+			break
+		}
+		if err = s.store.RemoveEntry(s.ns, entry.Sequence); err != nil {
+			break
+		}
+		purged++
+		bytes += msgSize(entry)
+	}
+	cb := s.updates
+	s.mu.Unlock()
+	if purged == 1 {
+		s.removed(cb, purged, bytes, matching[0].Sequence, matching[0].Subject)
+	} else {
+		s.removed(cb, purged, bytes, 0, "")
+	}
+	return purged, err
 }
+
+// Compact removes the messages below seq and returns how many it removed.
+// The next message gets seq at least.
+func (s *streamStore) Compact(seq uint64) (uint64, error) {
+	if seq == 0 {
+		return s.Purge()
+	}
+	s.mu.Lock()
+	bytes := s.bytes(0, seq-1)
+	purged, err := s.store.PurgeUpTo(s.ns, seq-1)
+	if err == nil && seq-1 > s.lastSeq() {
+		_, err = s.store.SetLastSequence(s.ns, seq-1)
+	}
+	cb := s.updates
+	s.mu.Unlock()
+	s.removed(cb, purged, bytes, 0, "")
+	return purged, err
+}
+
+// Truncate removes the messages after seq, which becomes the last sequence.
 func (s *streamStore) Truncate(seq uint64) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, err := s.store.PurgeUpTo(s.ns, seq)
+	bytes := s.bytes(seq+1, math.MaxUint64)
+	purged, err := s.store.SetLastSequence(s.ns, seq)
+	cb := s.updates
+	s.mu.Unlock()
+	s.removed(cb, purged, bytes, 0, "")
 	return err
+}
+
+// removed reports removed messages to cb.
+func (s *streamStore) removed(cb server.StorageUpdateHandler, msgs, bytes, seq uint64, subject string) {
+	if cb != nil && msgs > 0 {
+		cb(-int64(msgs), -int64(bytes), seq, subject)
+	}
+}
+
+// bytes returns the size of the messages from start to end.
+func (s *streamStore) bytes(start, end uint64) uint64 {
+	var n uint64
+	for entry := range s.entries(start, end) {
+		n += msgSize(entry)
+	}
+	return n
+}
+
+// entries yields the stream's entries from start to end, in order.
+func (s *streamStore) entries(start, end uint64) iter.Seq[*scree.StoredEntry] {
+	return func(yield func(*scree.StoredEntry) bool) {
+		first, err := s.store.FirstSequence(s.ns)
+		if err != nil {
+			return
+		}
+		start, end = max(start, first), min(end, s.lastSeq())
+		for seq := start; seq <= end && seq != 0; seq++ {
+			entry, err := s.store.LoadEntry(s.ns, seq)
+			if err == nil && !yield(entry) {
+				return
+			}
+		}
+	}
+}
+
+// fwcs is the subject filter that matches all subjects.
+const fwcs = ">"
+
+// subjectMatches reports whether subject matches filter, which may have
+// wildcards; an empty filter matches all subjects.
+func subjectMatches(subject, filter string) bool {
+	return filter == "" || filter == fwcs || server.SubjectMatchesFilter(subject, filter)
+}
+
+// msgSize returns the bytes a message counts for.
+func msgSize(entry *scree.StoredEntry) uint64 {
+	return uint64(len(entry.Header) + len(entry.Payload))
 }
 func (s *streamStore) GetSeqFromTime(t time.Time) uint64 { return 0 }
 
