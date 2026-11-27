@@ -47,18 +47,29 @@ Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
 - `scree`: core format, mount, namespace, entry, metadata, retention, verification, and recovery logic.
 - `blkdev`: logical block-device abstraction and NOR adapter.
 - `driver`: flash driver interfaces and geometry validation.
-- `jetstream`: NATS JetStream storage-provider adapter.
+- `jetstream`: NATS JetStream storage-provider adapter, in its own module so the core does not depend on NATS.
 - `internal/testflash`: in-memory flash devices used by tests.
 
 ## Development
 
-Run the test suite with:
+Run the test suites of both modules with:
 
 ```sh
 go test ./...
+(cd jetstream && go test ./...)
 ```
 
-The module currently replaces `github.com/nats-io/nats-server/v2` with `../nats-server`, so JetStream adapter builds require that checkout to exist next to this repository.
+The adapter needs `server.RegisterStreamStoreProvider`, which only the
+[kyanitecomputer/nats-server](https://github.com/kyanitecomputer/nats-server)
+fork has. `jetstream/go.mod` replaces `github.com/nats-io/nats-server/v2` with
+a commit of the fork; a module that imports the adapter needs the same
+`replace`, since Go ignores the replacements of dependencies. To build against
+a local checkout of the fork, use an uncommitted `go.work`:
+
+```sh
+go work init . ./jetstream
+go work edit -replace github.com/nats-io/nats-server/v2=../nats-server
+```
 
 ## Contributing
 
