@@ -1,7 +1,6 @@
 package scree
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -282,30 +281,18 @@ func encodeEntryRecord(record entryRecord) ([]byte, error) {
 	if len(record.Subject) > math.MaxUint16 || uint64(len(record.Header)) > math.MaxUint32 || uint64(len(record.Payload)) > math.MaxUint32 {
 		return nil, ErrInvalidArgument
 	}
-	buf := bytes.NewBuffer(make([]byte, 0, entryHeaderSize+len(record.Subject)+len(record.Header)+len(record.Payload)))
-	write := func(v any) error { return binary.Write(buf, binary.LittleEndian, v) }
-	if err := write(uint64(record.Namespace)); err != nil {
-		return nil, fmt.Errorf("encode namespace: %w", err)
-	}
-	if err := write(record.Sequence); err != nil {
-		return nil, fmt.Errorf("encode sequence: %w", err)
-	}
-	if err := write(record.Timestamp); err != nil {
-		return nil, fmt.Errorf("encode timestamp: %w", err)
-	}
-	if err := write(uint16(len(record.Subject))); err != nil {
-		return nil, fmt.Errorf("encode subject length: %w", err)
-	}
-	if err := write(uint32(len(record.Header))); err != nil {
-		return nil, fmt.Errorf("encode header length: %w", err)
-	}
-	if err := write(uint32(len(record.Payload))); err != nil {
-		return nil, fmt.Errorf("encode payload length: %w", err)
-	}
-	buf.WriteString(record.Subject)
-	buf.Write(record.Header)
-	buf.Write(record.Payload)
-	return buf.Bytes(), nil
+	data := make([]byte, entryHeaderSize+len(record.Subject)+len(record.Header)+len(record.Payload))
+	binary.LittleEndian.PutUint64(data[0:], uint64(record.Namespace))
+	binary.LittleEndian.PutUint64(data[8:], record.Sequence)
+	binary.LittleEndian.PutUint64(data[16:], uint64(record.Timestamp))
+	binary.LittleEndian.PutUint16(data[24:], uint16(len(record.Subject)))
+	binary.LittleEndian.PutUint32(data[26:], uint32(len(record.Header)))
+	binary.LittleEndian.PutUint32(data[30:], uint32(len(record.Payload)))
+	pos := entryHeaderSize
+	pos += copy(data[pos:], record.Subject)
+	pos += copy(data[pos:], record.Header)
+	copy(data[pos:], record.Payload)
+	return data, nil
 }
 
 func decodeEntryRecord(data []byte) (entryRecord, error) {
