@@ -2,6 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 
 	"src.kyanite.computer/scree/blkdev"
@@ -30,30 +31,26 @@ type journalEntry struct {
 	Data []byte
 }
 
-func openJournal(dev blkdev.BlockDevice, sb superblock) (*journal, error) {
-	j := &journal{
+// openJournal returns the journal of sb. It appends only after replay found
+// the end of the journal.
+func openJournal(dev blkdev.BlockDevice, sb superblock) *journal {
+	return &journal{
 		dev:       dev,
 		start:     int(sb.JournalStart),
 		blocks:    int(sb.JournalBlocks),
-		writeUnit: dev.WriteSize(),
+		writeUnit: unitSize(dev.WriteSize()),
 	}
-	entries, err := j.replay()
-	if err != nil {
-		return nil, err
-	}
-	j.nextUnit = len(entries)
-	return j, nil
 }
 
 func (j *journal) append(entry journalEntry) error {
 	if len(entry.Data) > j.writeUnit-journalOffsetData {
-		return ErrUnsupportedFormat
+		return fmt.Errorf("%w: record of %d bytes exceeds the journal unit", ErrInvalidArgument, len(entry.Data))
 	}
 	if j.nextUnit >= j.capacityUnits() {
 		return ErrNoSpace
 	}
 	buf := make([]byte, j.writeUnit)
-	copyErased(buf)
+	fillErased(buf, j.dev.EraseValue())
 	binary.LittleEndian.PutUint16(buf[journalOffsetMagic:], journalMagic)
 	binary.LittleEndian.PutUint16(buf[journalOffsetType:], entry.Type)
 	binary.LittleEndian.PutUint32(buf[journalOffsetLength:], uint32(len(entry.Data)))
@@ -61,41 +58,70 @@ func (j *journal) append(entry journalEntry) error {
 	copy(buf[journalOffsetData:], entry.Data)
 	binary.LittleEndian.PutUint32(buf[journalOffsetCRC:], journalCRC(buf, len(entry.Data)))
 	block, off := j.location(j.nextUnit)
-	if err := j.dev.WriteAt(block, off, buf); err != nil {
-		return err
-	}
+	// A failed write may have programmed part of the unit, which cannot be
+	// programmed again before the block is erased.
 	j.nextUnit++
+	return j.dev.WriteAt(block, off, buf)
+}
+
+// replay reads the journal up to its first erased unit, where the next
+// append goes. It returns the records of the units before and the number of
+// them that hold no valid record: a write that power loss or an error cut
+// short leaves such a unit, which is skipped.
+func (j *journal) replay() (entries []journalEntry, bad int, err error) {
+	buf := make([]byte, j.writeUnit)
+	unit := 0
+	for ; unit < j.capacityUnits(); unit++ {
+		block, off := j.location(unit)
+		if err := j.dev.ReadAt(block, off, buf); err != nil {
+			return nil, 0, err
+		}
+		if isErased(buf, j.dev.EraseValue()) {
+			break
+		}
+		entry, ok := j.decodeUnit(buf)
+		if !ok {
+			bad++
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	j.nextUnit = unit
+	return entries, bad, nil
+}
+
+// checkErased reports ErrCorrupt if a unit after the end of the journal is
+// programmed.
+func (j *journal) checkErased() error {
+	buf := make([]byte, j.writeUnit)
+	for unit := j.nextUnit; unit < j.capacityUnits(); unit++ {
+		block, off := j.location(unit)
+		if err := j.dev.ReadAt(block, off, buf); err != nil {
+			return err
+		}
+		if !isErased(buf, j.dev.EraseValue()) {
+			return fmt.Errorf("%w: journal unit %d is programmed after the end of the journal", ErrCorrupt, unit)
+		}
+	}
 	return nil
 }
 
-func (j *journal) replay() ([]journalEntry, error) {
-	var entries []journalEntry
-	buf := make([]byte, j.writeUnit)
-	for unit := 0; unit < j.capacityUnits(); unit++ {
-		block, off := j.location(unit)
-		if err := j.dev.ReadAt(block, off, buf); err != nil {
-			return nil, err
-		}
-		if isErased(buf) {
-			return entries, nil
-		}
-		if binary.LittleEndian.Uint16(buf[journalOffsetMagic:]) != journalMagic {
-			return entries, nil
-		}
-		length := int(binary.LittleEndian.Uint32(buf[journalOffsetLength:]))
-		if length < 0 || length > j.writeUnit-journalOffsetData {
-			return entries, nil
-		}
-		want := binary.LittleEndian.Uint32(buf[journalOffsetCRC:])
-		got := journalCRC(buf, length)
-		if got != want {
-			return entries, nil
-		}
-		data := make([]byte, length)
-		copy(data, buf[journalOffsetData:journalOffsetData+length])
-		entries = append(entries, journalEntry{Type: binary.LittleEndian.Uint16(buf[journalOffsetType:]), Data: data})
+// decodeUnit returns the record of a programmed unit, if it holds a valid one.
+func (j *journal) decodeUnit(buf []byte) (journalEntry, bool) {
+	if binary.LittleEndian.Uint16(buf[journalOffsetMagic:]) != journalMagic {
+		return journalEntry{}, false
 	}
-	return entries, nil
+	length32 := binary.LittleEndian.Uint32(buf[journalOffsetLength:])
+	if uint64(length32) > uint64(j.writeUnit-journalOffsetData) {
+		return journalEntry{}, false
+	}
+	length := int(length32)
+	if journalCRC(buf, length) != binary.LittleEndian.Uint32(buf[journalOffsetCRC:]) {
+		return journalEntry{}, false
+	}
+	data := make([]byte, length)
+	copy(data, buf[journalOffsetData:journalOffsetData+length])
+	return journalEntry{Type: binary.LittleEndian.Uint16(buf[journalOffsetType:]), Data: data}, true
 }
 
 func journalCRC(buf []byte, length int) uint32 {
@@ -106,7 +132,7 @@ func journalCRC(buf []byte, length int) uint32 {
 }
 
 func (j *journal) capacityUnits() int {
-	return j.blocks * j.dev.BlockSize() / j.writeUnit
+	return j.blocks * (j.dev.BlockSize() / j.writeUnit)
 }
 
 func (j *journal) location(unit int) (block int, off int) {
@@ -114,15 +140,15 @@ func (j *journal) location(unit int) (block int, off int) {
 	return j.start + unit/unitsPerBlock, (unit % unitsPerBlock) * j.writeUnit
 }
 
-func copyErased(buf []byte) {
+func fillErased(buf []byte, erased byte) {
 	for i := range buf {
-		buf[i] = 0xff
+		buf[i] = erased
 	}
 }
 
-func isErased(buf []byte) bool {
+func isErased(buf []byte, erased byte) bool {
 	for _, b := range buf {
-		if b != 0xff {
+		if b != erased {
 			return false
 		}
 	}

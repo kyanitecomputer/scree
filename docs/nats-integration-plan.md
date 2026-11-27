@@ -1,6 +1,9 @@
 # NATS JetStream Integration Plan
 
-Scree targets the latest local `nats-server` API in `../nats-server`.
+Scree targets the `fs-interface` branch of the
+[kyanitecomputer/nats-server](https://github.com/kyanitecomputer/nats-server)
+fork, which adds the provider registry described below; paths are relative to
+a checkout of it in `../nats-server`.
 
 ## Current NATS storage shape
 

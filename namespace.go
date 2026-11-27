@@ -2,6 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
+	"math"
 	"sort"
 )
 
@@ -18,18 +19,25 @@ type NamespaceEntry struct {
 
 // CreateNamespace creates a named namespace.
 func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
 	if name == "" {
-		return 0, ErrNotFound
+		return 0, ErrInvalidArgument
 	}
 	if id, ok := s.nsByName[name]; ok {
 		return id, nil
 	}
 	id := s.nextNS
-	s.nextNS++
-	data := encodeNamespaceRecord(id, name)
+	data, err := encodeNamespaceRecord(id, name)
+	if err != nil {
+		return 0, err
+	}
 	if err := s.journal.append(journalEntry{Type: journalTypeNamespaceCreate, Data: data}); err != nil {
 		return 0, err
 	}
@@ -39,12 +47,22 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 
 // LookupNamespace returns the namespace ID for name.
 func (s *Store) LookupNamespace(name string) (NamespaceID, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return 0, false, ErrClosed
+	}
 	id, ok := s.nsByName[name]
 	return id, ok, nil
 }
 
 // ListNamespaces returns all namespaces ordered by ID.
 func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
 	entries := make([]NamespaceEntry, 0, len(s.namespaces))
 	for id, name := range s.namespaces {
 		entries = append(entries, NamespaceEntry{ID: id, Name: name})
@@ -55,6 +73,11 @@ func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
 
 // DeleteNamespace deletes a namespace and its in-memory entries.
 func (s *Store) DeleteNamespace(id NamespaceID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -70,6 +93,14 @@ func (s *Store) DeleteNamespace(id NamespaceID) error {
 	return nil
 }
 
+// checkNamespace returns ErrNotFound if ns does not exist.
+func (s *Store) checkNamespace(ns NamespaceID) error {
+	if _, ok := s.namespaces[ns]; !ok {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func (s *Store) applyNamespaceCreate(id NamespaceID, name string) {
 	s.namespaces[id] = name
 	s.nsByName[name] = id
@@ -82,17 +113,19 @@ func (s *Store) applyNamespaceDelete(id NamespaceID) {
 	name := s.namespaces[id]
 	delete(s.namespaces, id)
 	delete(s.nsByName, name)
-	delete(s.entries, id)
-	delete(s.lastSeq, id)
+	delete(s.logs, id)
 	delete(s.meta, id)
 }
 
-func encodeNamespaceRecord(id NamespaceID, name string) []byte {
+func encodeNamespaceRecord(id NamespaceID, name string) ([]byte, error) {
+	if len(name) > math.MaxUint16 {
+		return nil, ErrInvalidArgument
+	}
 	data := make([]byte, 10+len(name))
 	binary.LittleEndian.PutUint64(data, uint64(id))
 	binary.LittleEndian.PutUint16(data[8:], uint16(len(name)))
 	copy(data[10:], name)
-	return data
+	return data, nil
 }
 
 func decodeNamespaceRecord(data []byte) (NamespaceID, string, error) {

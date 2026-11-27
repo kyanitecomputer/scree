@@ -1,6 +1,12 @@
 package scree
 
-import "testing"
+import (
+	"testing"
+
+	"src.kyanite.computer/scree/blkdev"
+	"src.kyanite.computer/scree/driver"
+	"src.kyanite.computer/scree/internal/testflash"
+)
 
 func TestJournalAppendReplay(t *testing.T) {
 	dev := newFormattedDevice(t, FormatOptions{JournalBlocks: 1})
@@ -15,13 +21,9 @@ func TestJournalAppendReplay(t *testing.T) {
 		t.Fatalf("append(two) error = %v", err)
 	}
 
-	reopened, err := openJournal(dev, store.super)
-	if err != nil {
-		t.Fatalf("openJournal() error = %v", err)
-	}
-	entries, err := reopened.replay()
-	if err != nil {
-		t.Fatalf("replay() error = %v", err)
+	entries, bad, err := openJournal(dev, store.super).replay()
+	if err != nil || bad != 0 {
+		t.Fatalf("replay() bad = %d, error = %v, want 0, nil", bad, err)
 	}
 	if len(entries) != 2 {
 		t.Fatalf("replay() len = %d, want 2", len(entries))
@@ -34,7 +36,7 @@ func TestJournalAppendReplay(t *testing.T) {
 	}
 }
 
-func TestJournalStopsAtCorruptEntry(t *testing.T) {
+func TestJournalSkipsCorruptEntry(t *testing.T) {
 	dev := newFormattedDevice(t, FormatOptions{JournalBlocks: 1})
 	store, err := Mount(dev, MountOptions{})
 	if err != nil {
@@ -44,17 +46,56 @@ func TestJournalStopsAtCorruptEntry(t *testing.T) {
 		t.Fatalf("append(one) error = %v", err)
 	}
 	block, off := store.journal.location(1)
-	bad := make([]byte, dev.WriteSize())
-	copyErased(bad)
-	bad[0] = 0
-	if err := dev.WriteAt(block, off, bad); err != nil {
-		t.Fatalf("WriteAt(bad) error = %v", err)
+	torn := make([]byte, dev.WriteSize())
+	fillErased(torn, dev.EraseValue())
+	torn[0] = 0
+	if err := dev.WriteAt(block, off, torn); err != nil {
+		t.Fatalf("WriteAt(torn) error = %v", err)
 	}
-	entries, err := store.journal.replay()
+	store.journal.nextUnit = 2
+	if err := store.journal.append(journalEntry{Type: 1, Data: []byte("three")}); err != nil {
+		t.Fatalf("append(three) error = %v", err)
+	}
+	reopened := openJournal(dev, store.super)
+	entries, bad, err := reopened.replay()
 	if err != nil {
 		t.Fatalf("replay() error = %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("replay() len = %d, want 1", len(entries))
+	if len(entries) != 2 || bad != 1 || string(entries[1].Data) != "three" {
+		t.Fatalf("replay() = %+v, bad %d, want one, three and 1 bad unit", entries, bad)
+	}
+	if reopened.nextUnit != 3 {
+		t.Fatalf("replay() nextUnit = %d, want 3", reopened.nextUnit)
+	}
+}
+
+func TestJournalUsesEraseValue(t *testing.T) {
+	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0x00})
+	if err != nil {
+		t.Fatalf("testflash.NewNOR() error = %v", err)
+	}
+	dev, err := blkdev.NewNOR(flash)
+	if err != nil {
+		t.Fatalf("blkdev.NewNOR() error = %v", err)
+	}
+	if err := Format(dev, FormatOptions{}); err != nil {
+		t.Fatalf("Format() error = %v", err)
+	}
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	if _, err := store.CreateNamespace("a"); err != nil {
+		t.Fatalf("CreateNamespace() error = %v", err)
+	}
+	reopened, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() reopened error = %v", err)
+	}
+	if _, ok, _ := reopened.LookupNamespace("a"); !ok {
+		t.Fatal("LookupNamespace() found nothing after remount")
+	}
+	if err := reopened.Verify(VerifyOptions{CheckData: true}); err != nil {
+		t.Fatalf("Verify() error = %v", err)
 	}
 }

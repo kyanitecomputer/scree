@@ -11,7 +11,7 @@ Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
 - Formats and mounts a Scree volume on a logical block device.
 - Stores redundant superblocks and master nodes, with fallback when the primary copy is unreadable.
 - Uses an append-only journal with CRC-protected records.
-- Replays journal state after remount, including after an interrupted append where previous entries remain readable.
+- Replays journal state after remount, including after an interrupted append: previous entries remain readable, and appends continue past the torn unit.
 - Supports NOR flash through `blkdev.NewNOR` and the `driver.NORFlash` interface.
 - Provides an in-memory NOR flash implementation for tests under `internal/testflash`.
 - Manages named namespaces:
@@ -27,38 +27,51 @@ Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
   - remove one entry
   - purge a namespace
   - purge entries up to a sequence
+  - set the last sequence, which skips sequences ahead or truncates the entries after it
   - persist removals and purges across remounts
 - Stores namespace metadata with put/get/delete operations.
 - Supports read-only mounts that reject write operations.
-- Provides basic verification of persistent metadata and journal entry decoding.
-- Includes a preliminary NATS JetStream stream-store adapter that can store, load, remove, purge, and report basic stream state.
+- Is safe for concurrent use; `Close` syncs the device and ends the store.
+- Verifies persistent metadata, reports journal units without a valid record, and optionally decodes every journal record.
+- Includes a preliminary NATS JetStream stream-store adapter that can store, skip, load (also by wildcard or sublist), remove, purge, compact, truncate, and report stream and per-subject state.
 
 ## Not yet complete
 
 - Free-space accounting is static after format; journal compaction and block reclamation are not implemented.
 - Entries currently live in the journal and are rebuilt into memory on mount.
 - Journal capacity is finite; writes return `ErrNoSpace` when reserved journal units are exhausted.
-- Authentication is only represented as a volume flag and mount policy check; data authentication is not implemented yet.
+- Authentication is not implemented yet: `Format` refuses `EnableAuth`, and `Mount` refuses volumes flagged as authenticated.
 - NAND support is defined at the driver interface level but does not have a block-device adapter yet.
-- The JetStream adapter is partial. Several advanced APIs are stubs or simplified, including snapshots, subject totals, wildcard/multi-subject filtering, time lookup, consumer persistence encoding, and utilization reporting.
+- The JetStream adapter is partial: consumer state stays in memory, the sourcing state of messages is not tracked, snapshots fail, encoded stream state and utilization are not reported, and subject queries walk the stream's entries. Each stream mounts its own device.
 
 ## Packages
 
 - `scree`: core format, mount, namespace, entry, metadata, retention, verification, and recovery logic.
 - `blkdev`: logical block-device abstraction and NOR adapter.
 - `driver`: flash driver interfaces and geometry validation.
-- `jetstream`: NATS JetStream storage-provider adapter.
+- `jetstream`: NATS JetStream storage-provider adapter, in its own module so the core does not depend on NATS.
 - `internal/testflash`: in-memory flash devices used by tests.
 
 ## Development
 
-Run the test suite with:
+Run the test suites of both modules with:
 
 ```sh
 go test ./...
+(cd jetstream && go test ./...)
 ```
 
-The module currently replaces `github.com/nats-io/nats-server/v2` with `../nats-server`, so JetStream adapter builds require that checkout to exist next to this repository.
+The adapter needs `server.RegisterStreamStoreProvider`, which only the
+[kyanitecomputer/nats-server](https://github.com/kyanitecomputer/nats-server)
+fork has. `jetstream/go.mod` replaces `github.com/nats-io/nats-server/v2` with
+a commit of the fork; a module that imports the adapter needs the same
+`replace`, since Go ignores the replacements of dependencies. To build against
+a local checkout of the fork, use an uncommitted `go.work`:
+
+```sh
+go work init . ./jetstream
+go work edit -replace github.com/nats-io/nats-server/v2=../nats-server
+```
 
 ## Contributing
 

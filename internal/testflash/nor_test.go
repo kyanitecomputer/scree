@@ -2,6 +2,7 @@ package testflash
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"src.kyanite.computer/scree/driver"
@@ -69,5 +70,83 @@ func TestNORRejectsWriteToProgrammedBits(t *testing.T) {
 	}
 	if _, err := nor.WriteAt(second, 0); !errors.Is(err, ErrNotErased) {
 		t.Fatalf("WriteAt(second) error = %v, want %v", err, ErrNotErased)
+	}
+}
+
+func TestNORRejectsOverflowingRange(t *testing.T) {
+	nor, err := NewNOR(testGeometry())
+	if err != nil {
+		t.Fatalf("NewNOR() error = %v", err)
+	}
+	if _, err := nor.ReadAt(make([]byte, 256), math.MaxInt64-128); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("ReadAt() error = %v, want %v", err, ErrOutOfRange)
+	}
+	if _, err := nor.WriteAt(make([]byte, 256), math.MaxInt64-128); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("WriteAt() error = %v, want %v", err, ErrOutOfRange)
+	}
+}
+
+func TestNORTearAfterWrites(t *testing.T) {
+	nor, err := NewNOR(testGeometry())
+	if err != nil {
+		t.Fatalf("NewNOR() error = %v", err)
+	}
+	nor.TearAfterWrites(1, 16)
+	src := make([]byte, 256)
+	if _, err := nor.WriteAt(src, 0); err != nil {
+		t.Fatalf("WriteAt(first) error = %v", err)
+	}
+	if _, err := nor.WriteAt(src, 256); !errors.Is(err, ErrInjected) {
+		t.Fatalf("WriteAt(torn) error = %v, want %v", err, ErrInjected)
+	}
+	got := make([]byte, 256)
+	if _, err := nor.ReadAt(got, 256); err != nil {
+		t.Fatalf("ReadAt() error = %v", err)
+	}
+	for i, b := range got {
+		want := byte(0xff)
+		if i < 16 {
+			want = 0
+		}
+		if b != want {
+			t.Fatalf("ReadAt()[%d] = %#x, want %#x", i, b, want)
+		}
+	}
+	nor.ClearFailures()
+	if _, err := nor.WriteAt(src, 512); err != nil {
+		t.Fatalf("WriteAt(after clear) error = %v", err)
+	}
+}
+
+func TestNORProgramsAwayFromEraseValue(t *testing.T) {
+	geometry := testGeometry()
+	geometry.EraseValue = 0x00
+	nor, err := NewNOR(geometry)
+	if err != nil {
+		t.Fatalf("NewNOR() error = %v", err)
+	}
+	first := make([]byte, 256)
+	for i := range first {
+		first[i] = 0xf0
+	}
+	if _, err := nor.WriteAt(first, 0); err != nil {
+		t.Fatalf("WriteAt(first) error = %v", err)
+	}
+	if _, err := nor.WriteAt(make([]byte, 256), 0); !errors.Is(err, ErrNotErased) {
+		t.Fatalf("WriteAt(erased over programmed) error = %v, want %v", err, ErrNotErased)
+	}
+	second := make([]byte, 256)
+	for i := range second {
+		second[i] = 0xff
+	}
+	if _, err := nor.WriteAt(second, 0); err != nil {
+		t.Fatalf("WriteAt(second) error = %v", err)
+	}
+	got := make([]byte, 256)
+	if _, err := nor.ReadAt(got, 0); err != nil {
+		t.Fatalf("ReadAt() error = %v", err)
+	}
+	if got[0] != 0xff {
+		t.Fatalf("ReadAt()[0] = %#x, want 0xff", got[0])
 	}
 }

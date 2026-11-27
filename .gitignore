@@ -11,3 +11,7 @@ coverage.*
 # Editor / OS
 .DS_Store
 *.swp
+
+# Local workspaces
+go.work
+go.work.sum

@@ -1,9 +1,15 @@
 package jetstream
 
 import (
+	"errors"
+	"math"
+	"slices"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats-server/v2/server/gsl"
 
 	"src.kyanite.computer/scree"
 	"src.kyanite.computer/scree/blkdev"
@@ -47,6 +53,37 @@ func TestStreamStoreStateAfterRemove(t *testing.T) {
 	}
 }
 
+func TestStreamStoreConcurrentUse(t *testing.T) {
+	store := newTestStreamStore(t)
+	cs, err := store.ConsumerStore("c", time.Now(), &server.ConsumerConfig{})
+	if err != nil {
+		t.Fatalf("ConsumerStore() error = %v", err)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for i := range 10 {
+				if _, _, err := store.StoreMsg("foo", nil, []byte("x"), 0); err != nil {
+					t.Errorf("StoreMsg() error = %v", err)
+					return
+				}
+				cs.UpdateDelivered(uint64(i), uint64(i), 1, 0)
+				cs.State()
+			}
+		})
+		wg.Go(func() {
+			for range 10 {
+				store.RegisterStorageUpdates(func(int64, int64, uint64, string) {})
+				store.State()
+			}
+		})
+	}
+	wg.Wait()
+	if state := store.State(); state.Msgs != 40 {
+		t.Fatalf("State().Msgs = %d, want 40", state.Msgs)
+	}
+}
+
 func newTestStreamStore(t *testing.T) *streamStore {
 	t.Helper()
 	dev := newTestDevice(t)
@@ -75,4 +112,271 @@ func newTestDevice(t *testing.T) blkdev.BlockDevice {
 		t.Fatalf("blkdev.NewNOR() error = %v", err)
 	}
 	return dev
+}
+
+func TestStreamStoreDelete(t *testing.T) {
+	dev := newTestDevice(t)
+	if err := scree.Format(dev, scree.FormatOptions{}); err != nil {
+		t.Fatalf("scree.Format() error = %v", err)
+	}
+	store, err := scree.Mount(dev, scree.MountOptions{})
+	if err != nil {
+		t.Fatalf("scree.Mount() error = %v", err)
+	}
+	ns, err := streamNamespace(store, &server.StreamConfig{Name: "TEST"})
+	if err != nil {
+		t.Fatalf("streamNamespace() error = %v", err)
+	}
+	ss := &streamStore{storage: server.StorageType(1000), store: store, ns: ns}
+	if _, _, err := ss.StoreMsg("foo", nil, []byte("x"), 0); err != nil {
+		t.Fatalf("StoreMsg() error = %v", err)
+	}
+	if err := ss.Delete(true); err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if err := ss.Stop(); err != nil {
+		t.Fatalf("Stop() after Delete error = %v", err)
+	}
+	reopened, err := scree.Mount(dev, scree.MountOptions{})
+	if err != nil {
+		t.Fatalf("scree.Mount() reopened error = %v", err)
+	}
+	if _, ok, _ := reopened.LookupNamespace("TEST"); ok {
+		t.Fatal("namespace TEST still exists after Delete")
+	}
+}
+
+func TestStreamStoreRawAndSkip(t *testing.T) {
+	store := newTestStreamStore(t)
+	if err := store.StoreRawMsg("foo", nil, []byte("one"), 2, 1, 0, false); !errors.Is(err, server.ErrSequenceMismatch) {
+		t.Fatalf("StoreRawMsg(2) error = %v, want %v", err, server.ErrSequenceMismatch)
+	}
+	if state := store.State(); state.LastSeq != 0 {
+		t.Fatalf("StoreRawMsg(2) stored a message: %+v", state)
+	}
+	if err := store.StoreRawMsg("foo", nil, []byte("one"), 1, 1, 0, false); err != nil {
+		t.Fatalf("StoreRawMsg(1) error = %v", err)
+	}
+	if seq, err := store.SkipMsg(2); err != nil || seq != 2 {
+		t.Fatalf("SkipMsg(2) = %d, %v, want 2, nil", seq, err)
+	}
+	if _, err := store.SkipMsg(5); !errors.Is(err, server.ErrSequenceMismatch) {
+		t.Fatalf("SkipMsg(5) error = %v, want %v", err, server.ErrSequenceMismatch)
+	}
+	if err := store.SkipMsgs(3, 3); err != nil {
+		t.Fatalf("SkipMsgs(3, 3) error = %v", err)
+	}
+	if seq, err := store.SkipMsg(0); err != nil || seq != 6 {
+		t.Fatalf("SkipMsg(0) = %d, %v, want 6, nil", seq, err)
+	}
+	seq, _, err := store.StoreMsg("foo", nil, []byte("two"), 0)
+	if err != nil || seq != 7 {
+		t.Fatalf("StoreMsg() = %d, %v, want 7, nil", seq, err)
+	}
+	if state := store.State(); state.Msgs != 2 || state.FirstSeq != 1 || state.LastSeq != 7 {
+		t.Fatalf("State() = %+v, want 2 messages from 1 to 7", state)
+	}
+}
+
+// storeTestMsgs stores a message on each subject, in order.
+func storeTestMsgs(t *testing.T, store *streamStore, subjects ...string) {
+	t.Helper()
+	for _, subject := range subjects {
+		if _, _, err := store.StoreMsg(subject, nil, []byte("x"), 0); err != nil {
+			t.Fatalf("StoreMsg(%q) error = %v", subject, err)
+		}
+	}
+}
+
+func TestStreamStorePurgeCompactTruncate(t *testing.T) {
+	store := newTestStreamStore(t)
+	var msgs, bytes int64
+	store.RegisterStorageUpdates(func(m, b int64, _ uint64, _ string) { msgs += m; bytes += b })
+	storeTestMsgs(t, store, "a", "b", "a", "b", "a")
+
+	if n, err := store.Compact(3); err != nil || n != 2 {
+		t.Fatalf("Compact(3) = %d, %v, want 2, nil", n, err)
+	}
+	if err := store.Truncate(4); err != nil {
+		t.Fatalf("Truncate(4) error = %v", err)
+	}
+	if state := store.State(); state.Msgs != 2 || state.FirstSeq != 3 || state.LastSeq != 4 {
+		t.Fatalf("State() after Compact(3) and Truncate(4) = %+v, want 3 to 4", state)
+	}
+	if msgs != 2 || bytes != 2 {
+		t.Fatalf("updates = %d messages, %d bytes, want 2, 2", msgs, bytes)
+	}
+	if n, err := store.Purge(); err != nil || n != 2 {
+		t.Fatalf("Purge() = %d, %v, want 2, nil", n, err)
+	}
+	if n, err := store.Compact(10); err != nil || n != 0 {
+		t.Fatalf("Compact(10) = %d, %v, want 0, nil", n, err)
+	}
+	if seq, _, err := store.StoreMsg("a", nil, nil, 0); err != nil || seq != 10 {
+		t.Fatalf("StoreMsg() after Compact(10) = %d, %v, want 10, nil", seq, err)
+	}
+	if msgs != 1 {
+		t.Fatalf("updates = %d messages, want 1", msgs)
+	}
+}
+
+func TestStreamStorePurgeEx(t *testing.T) {
+	store := newTestStreamStore(t)
+	storeTestMsgs(t, store, "a.1", "b", "a.2", "a.1", "b", "a.3")
+
+	if n, err := store.PurgeEx("a.*", 0, 1); err != nil || n != 3 {
+		t.Fatalf("PurgeEx(a.*, keep 1) = %d, %v, want 3, nil", n, err)
+	}
+	if n, err := store.PurgeEx("b", 5, 0); err != nil || n != 1 {
+		t.Fatalf("PurgeEx(b, below 5) = %d, %v, want 1, nil", n, err)
+	}
+	var seqs []uint64
+	for entry := range store.entries(0, math.MaxUint64) {
+		seqs = append(seqs, entry.Sequence)
+	}
+	if !slices.Equal(seqs, []uint64{5, 6}) {
+		t.Fatalf("sequences after PurgeEx = %v, want [5 6]", seqs)
+	}
+}
+
+func TestStreamStoreLoadByFilter(t *testing.T) {
+	store := newTestStreamStore(t)
+	storeTestMsgs(t, store, "a.1", "b", "a.2", "c")
+
+	sm, seq, err := store.LoadNextMsg("a.*", true, 2, nil)
+	if err != nil || seq != 3 || sm.Subject() != "a.2" {
+		t.Fatalf("LoadNextMsg(a.*, 2) = %q, %d, %v, want a.2, 3, nil", sm.Subject(), seq, err)
+	}
+	if _, seq, err := store.LoadNextMsg("a.*", true, 4, nil); !errors.Is(err, server.ErrStoreEOF) || seq != 4 {
+		t.Fatalf("LoadNextMsg(a.*, 4) = %d, %v, want 4, %v", seq, err, server.ErrStoreEOF)
+	}
+	sm, seq, err = store.LoadPrevMsg("a.*", true, 2, nil)
+	if err != nil || seq != 1 || sm.Subject() != "a.1" {
+		t.Fatalf("LoadPrevMsg(a.*, 2) = %q, %d, %v, want a.1, 1, nil", sm.Subject(), seq, err)
+	}
+	if sm, err := store.LoadLastMsg("a.>", nil); err != nil || sm.Sequence() != 3 {
+		t.Fatalf("LoadLastMsg(a.>) = %v, %v, want sequence 3", sm, err)
+	}
+
+	sl := gsl.NewSimpleSublist()
+	if err := sl.Insert("c", struct{}{}); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if err := sl.Insert("b", struct{}{}); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if _, seq, err := store.LoadNextMsgMulti(sl, 3, nil); err != nil || seq != 4 {
+		t.Fatalf("LoadNextMsgMulti(3) = %d, %v, want 4, nil", seq, err)
+	}
+	if _, seq, err := store.LoadPrevMsgMulti(sl, 3, nil); err != nil || seq != 2 {
+		t.Fatalf("LoadPrevMsgMulti(3) = %d, %v, want 2, nil", seq, err)
+	}
+}
+
+func TestStreamStoreSubjectState(t *testing.T) {
+	store := newTestStreamStore(t)
+	if seqs, err := store.AllLastSeqs(); err != nil || seqs != nil {
+		t.Fatalf("AllLastSeqs() of an empty stream = %v, %v, want nil, nil", seqs, err)
+	}
+	storeTestMsgs(t, store, "a.1", "b", "a.2", "a.1", "b")
+
+	if seqs, err := store.AllLastSeqs(); err != nil || !slices.Equal(seqs, []uint64{3, 4, 5}) {
+		t.Fatalf("AllLastSeqs() = %v, %v, want [3 4 5], nil", seqs, err)
+	}
+	if seqs, err := store.MultiLastSeqs([]string{"a.*"}, 3, 0); err != nil || !slices.Equal(seqs, []uint64{1, 3}) {
+		t.Fatalf("MultiLastSeqs(a.*, 3) = %v, %v, want [1 3], nil", seqs, err)
+	}
+	if _, err := store.MultiLastSeqs([]string{">"}, 0, 2); !errors.Is(err, server.ErrTooManyResults) {
+		t.Fatalf("MultiLastSeqs(>, max 2) error = %v, want %v", err, server.ErrTooManyResults)
+	}
+	state, err := store.FilteredState(2, "a.*")
+	if err != nil || state.Msgs != 2 || state.First != 3 || state.Last != 4 {
+		t.Fatalf("FilteredState(2, a.*) = %+v, %v, want 2 messages from 3 to 4", state, err)
+	}
+	if totals := store.SubjectsTotals("a.*"); len(totals) != 2 || totals["a.1"] != 2 || totals["a.2"] != 1 {
+		t.Fatalf("SubjectsTotals(a.*) = %v, want a.1: 2, a.2: 1", totals)
+	}
+	if states := store.SubjectsState(">"); len(states) != 3 || states["b"].First != 2 || states["b"].Last != 5 {
+		t.Fatalf("SubjectsState(>) = %v, want b from 2 to 5", states)
+	}
+	if total, last, err := store.NumPending(2, "a.*", false); err != nil || total != 2 || last != 5 {
+		t.Fatalf("NumPending(2, a.*) = %d, %d, %v, want 2, 5, nil", total, last, err)
+	}
+	if total, _, err := store.NumPending(1, ">", true); err != nil || total != 3 {
+		t.Fatalf("NumPending(1, >, last per subject) = %d, %v, want 3, nil", total, err)
+	}
+}
+
+func TestStreamStoreGetSeqFromTime(t *testing.T) {
+	store := newTestStreamStore(t)
+	for i, ts := range []int64{10, 20, 30} {
+		if err := store.StoreRawMsg("a", nil, nil, uint64(i+1), ts, 0, false); err != nil {
+			t.Fatalf("StoreRawMsg() error = %v", err)
+		}
+	}
+	for ts, want := range map[int64]uint64{5: 1, 20: 2, 25: 3, 31: 4} {
+		if got := store.GetSeqFromTime(time.Unix(0, ts)); got != want {
+			t.Fatalf("GetSeqFromTime(%d) = %d, want %d", ts, got, want)
+		}
+	}
+}
+
+func TestStreamStoreFastStateResets(t *testing.T) {
+	store := newTestStreamStore(t)
+	storeTestMsgs(t, store, "a", "b", "a", "c")
+	if _, err := store.RemoveMsg(2); err != nil {
+		t.Fatalf("RemoveMsg(2) error = %v", err)
+	}
+	if _, err := store.RemoveMsg(4); err != nil {
+		t.Fatalf("RemoveMsg(4) error = %v", err)
+	}
+	st := server.StreamState{Msgs: 100, Bytes: 100, FirstTime: time.Unix(1, 0), NumDeleted: 7}
+	store.FastState(&st)
+	if st.Msgs != 2 || st.Bytes != 2 || st.FirstSeq != 1 || st.LastSeq != 4 || st.NumDeleted != 2 || st.NumSubjects != 1 {
+		t.Fatalf("FastState() = %+v, want 2 messages of 1 subject from 1 to 4, 2 deleted", st)
+	}
+	if state := store.State(); !slices.Equal(state.Deleted, []uint64{2, 4}) {
+		t.Fatalf("State().Deleted = %v, want [2 4]", state.Deleted)
+	}
+	if _, err := store.Purge(); err != nil {
+		t.Fatalf("Purge() error = %v", err)
+	}
+	store.FastState(&st)
+	if st.Msgs != 0 || st.Bytes != 0 || st.FirstSeq != 5 || st.LastSeq != 4 || !st.FirstTime.IsZero() {
+		t.Fatalf("FastState() after Purge = %+v, want empty from 5", st)
+	}
+}
+
+func TestConsumerStateIsCopied(t *testing.T) {
+	store := newTestStreamStore(t)
+	cs, err := store.ConsumerStore("c", time.Now(), &server.ConsumerConfig{})
+	if err != nil {
+		t.Fatalf("ConsumerStore() error = %v", err)
+	}
+	in := &server.ConsumerState{
+		Pending:     map[uint64]*server.Pending{1: {Sequence: 1, Timestamp: 1}},
+		Redelivered: map[uint64]uint64{1: 2},
+	}
+	if err := cs.ForceUpdate(in); err != nil {
+		t.Fatalf("ForceUpdate() error = %v", err)
+	}
+	in.Pending[1].Timestamp = 99
+	in.Redelivered[1] = 99
+	out, err := cs.State()
+	if err != nil {
+		t.Fatalf("State() error = %v", err)
+	}
+	if out.Pending[1].Timestamp != 1 || out.Redelivered[1] != 2 {
+		t.Fatalf("State() = %+v, changed with the caller's state", out)
+	}
+	out.Pending[2] = &server.Pending{}
+	if again, _ := cs.State(); len(again.Pending) != 1 {
+		t.Fatalf("State() has %d pending, changed with a returned state", len(again.Pending))
+	}
+}
+
+func TestStreamStoreSnapshotFails(t *testing.T) {
+	if _, err := newTestStreamStore(t).Snapshot(time.Second, true, true); err == nil {
+		t.Fatal("Snapshot() succeeded")
+	}
 }

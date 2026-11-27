@@ -2,8 +2,9 @@ package scree
 
 import (
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"hash/crc32"
+	"math"
 
 	"src.kyanite.computer/scree/blkdev"
 )
@@ -13,6 +14,10 @@ const (
 	superVersion      = uint32(1)
 	minBlockCount     = 8
 	defaultJournalLEB = 4
+
+	// journalStart is the first journal block, after the two superblocks
+	// and the two master nodes.
+	journalStart = 4
 
 	superOffsetMagic         = 0
 	superOffsetVersion       = 8
@@ -37,33 +42,50 @@ type superblock struct {
 	Flags         uint32
 }
 
+// unitSize returns the size superblocks, master nodes and journal records are
+// written in: the smallest multiple of the write size that holds a superblock.
+func unitSize(writeSize int) int {
+	return (superSize + writeSize - 1) / writeSize * writeSize
+}
+
+// checkUnitSize rejects devices whose erase blocks cannot hold a unit.
+func checkUnitSize(dev blkdev.BlockDevice) error {
+	if unitSize(dev.WriteSize()) > dev.BlockSize() {
+		return ErrUnsupportedFormat
+	}
+	return nil
+}
+
 func newSuperblock(dev blkdev.BlockDevice, opts FormatOptions) (superblock, error) {
-	if dev.BlockCount() < minBlockCount {
+	if err := checkUnitSize(dev); err != nil {
+		return superblock{}, err
+	}
+	if dev.BlockCount() < minBlockCount || uint64(dev.BlockCount()) > math.MaxUint32 || uint64(dev.BlockSize()) > math.MaxUint32 {
 		return superblock{}, ErrUnsupportedFormat
 	}
 	journalBlocks := opts.JournalBlocks
 	if journalBlocks == 0 {
 		journalBlocks = defaultJournalLEB
 	}
-	if journalBlocks < 1 || 4+journalBlocks > dev.BlockCount() {
+	if journalBlocks < 1 || journalBlocks > dev.BlockCount()-journalStart {
 		return superblock{}, ErrUnsupportedFormat
 	}
 	var flags uint32
 	if opts.EnableAuth {
-		flags |= superFlagAuth
+		return superblock{}, fmt.Errorf("%w: authenticated volumes are not implemented", ErrUnsupportedFormat)
 	}
 	return superblock{
 		BlockSize:     uint32(dev.BlockSize()),
 		BlockCount:    uint32(dev.BlockCount()),
 		WriteSize:     uint32(dev.WriteSize()),
-		JournalStart:  4,
+		JournalStart:  journalStart,
 		JournalBlocks: uint32(journalBlocks),
 		Flags:         flags,
 	}, nil
 }
 
 func writeSuperblock(dev blkdev.BlockDevice, block int, sb superblock) error {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	copy(buf[superOffsetMagic:], superMagic)
 	binary.LittleEndian.PutUint32(buf[superOffsetVersion:], superVersion)
 	binary.LittleEndian.PutUint32(buf[superOffsetBlockSize:], sb.BlockSize)
@@ -80,7 +102,7 @@ func writeSuperblock(dev blkdev.BlockDevice, block int, sb superblock) error {
 }
 
 func readSuperblock(dev blkdev.BlockDevice, block int) (superblock, error) {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	if err := dev.ReadAt(block, 0, buf); err != nil {
 		return superblock{}, err
 	}
@@ -102,8 +124,11 @@ func readSuperblock(dev blkdev.BlockDevice, block int) (superblock, error) {
 		JournalBlocks: binary.LittleEndian.Uint32(buf[superOffsetJournalBlocks:]),
 		Flags:         binary.LittleEndian.Uint32(buf[superOffsetFlags:]),
 	}
-	if int(sb.BlockSize) != dev.BlockSize() || int(sb.BlockCount) != dev.BlockCount() || int(sb.WriteSize) != dev.WriteSize() {
+	if uint64(sb.BlockSize) != uint64(dev.BlockSize()) || uint64(sb.BlockCount) != uint64(dev.BlockCount()) || uint64(sb.WriteSize) != uint64(dev.WriteSize()) {
 		return superblock{}, ErrUnsupportedFormat
+	}
+	if sb.JournalStart < journalStart || sb.JournalBlocks < 1 || uint64(sb.JournalStart)+uint64(sb.JournalBlocks) > uint64(sb.BlockCount) {
+		return superblock{}, ErrCorrupt
 	}
 	return sb, nil
 }
@@ -117,8 +142,5 @@ func mountSuperblock(dev blkdev.BlockDevice) (superblock, error) {
 	if backupErr == nil {
 		return backup, nil
 	}
-	if errors.Is(err, ErrUnsupportedFormat) || errors.Is(backupErr, ErrUnsupportedFormat) {
-		return superblock{}, ErrUnsupportedFormat
-	}
-	return superblock{}, ErrCorrupt
+	return superblock{}, fmt.Errorf("primary superblock: %w; backup superblock: %w", err, backupErr)
 }

@@ -1,6 +1,10 @@
 package blkdev
 
-import "testing"
+import (
+	"errors"
+	"math"
+	"testing"
+)
 
 type testDevice struct {
 	blockSize  int
@@ -11,6 +15,7 @@ type testDevice struct {
 func (d testDevice) BlockSize() int                 { return d.blockSize }
 func (d testDevice) BlockCount() int                { return d.blockCount }
 func (d testDevice) WriteSize() int                 { return d.writeSize }
+func (d testDevice) EraseValue() byte               { return 0xff }
 func (d testDevice) ReadAt(int, int, []byte) error  { return nil }
 func (d testDevice) WriteAt(int, int, []byte) error { return nil }
 func (d testDevice) EraseBlock(int) error           { return nil }
@@ -36,5 +41,15 @@ func TestCheckWrite(t *testing.T) {
 	}
 	if err := CheckWrite(dev, 0, 1, 256); err != ErrUnaligned {
 		t.Fatalf("CheckWrite() unaligned error = %v, want %v", err, ErrUnaligned)
+	}
+}
+
+func TestCheckRangeOverflow(t *testing.T) {
+	dev := testDevice{blockSize: 4096, blockCount: 2, writeSize: 256}
+	if err := CheckRange(dev, 0, 256, math.MaxInt); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("CheckRange() error = %v, want %v", err, ErrOutOfRange)
+	}
+	if err := CheckRange(dev, 0, 4096, 0); err != nil {
+		t.Fatalf("CheckRange() at end error = %v", err)
 	}
 }

@@ -2,7 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"hash/crc32"
 
 	"src.kyanite.computer/scree/blkdev"
@@ -30,7 +30,7 @@ func newMasterNode(sb superblock) masterNode {
 }
 
 func writeMaster(dev blkdev.BlockDevice, block int, m masterNode) error {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	copy(buf[masterOffsetMagic:], masterMagic)
 	binary.LittleEndian.PutUint64(buf[masterOffsetSequence:], m.Sequence)
 	binary.LittleEndian.PutUint32(buf[masterOffsetFreeStart:], m.FreeStart)
@@ -43,7 +43,7 @@ func writeMaster(dev blkdev.BlockDevice, block int, m masterNode) error {
 }
 
 func readMaster(dev blkdev.BlockDevice, block int) (masterNode, error) {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	if err := dev.ReadAt(block, 0, buf); err != nil {
 		return masterNode{}, err
 	}
@@ -76,17 +76,14 @@ func mountMaster(dev blkdev.BlockDevice) (masterNode, error) {
 	if errB == nil {
 		return b, nil
 	}
-	if errors.Is(errA, ErrUnsupportedFormat) || errors.Is(errB, ErrUnsupportedFormat) {
-		return masterNode{}, ErrUnsupportedFormat
-	}
-	return masterNode{}, ErrCorrupt
+	return masterNode{}, fmt.Errorf("primary master: %w; backup master: %w", errA, errB)
 }
 
 func validateMaster(sb superblock, m masterNode) error {
 	if m.FreeStart != sb.JournalStart+sb.JournalBlocks {
 		return ErrCorrupt
 	}
-	if m.FreeStart+m.FreeBlocks != sb.BlockCount {
+	if uint64(m.FreeStart)+uint64(m.FreeBlocks) != uint64(sb.BlockCount) {
 		return ErrCorrupt
 	}
 	return nil

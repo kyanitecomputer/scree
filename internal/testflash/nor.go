@@ -29,6 +29,7 @@ type NOR struct {
 	data        []byte
 	eraseCounts []uint64
 	failWrites  int
+	tearKeep    int
 }
 
 // NewNOR returns an erased in-memory NOR flash simulator.
@@ -58,7 +59,7 @@ func (n *NOR) ReadAt(dst []byte, addr int64) (int, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if addr < 0 || addr+int64(len(dst)) > int64(len(n.data)) {
+	if !n.inRange(addr, len(dst)) {
 		return 0, ErrOutOfRange
 	}
 	copy(dst, n.data[addr:addr+int64(len(dst))])
@@ -69,28 +70,37 @@ func (n *NOR) ReadAt(dst []byte, addr int64) (int, error) {
 func (n *NOR) WriteAt(src []byte, addr int64) (int, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.failWrites == 0 {
+	if n.failWrites == 0 && n.tearKeep == 0 {
 		return 0, ErrInjected
 	}
-	if n.failWrites > 0 {
-		n.failWrites--
-	}
 
-	if addr < 0 || addr+int64(len(src)) > int64(len(n.data)) {
+	if !n.inRange(addr, len(src)) {
 		return 0, ErrOutOfRange
 	}
 	if addr%int64(n.geometry.PageSize) != 0 || len(src)%n.geometry.PageSize != 0 {
 		return 0, ErrUnaligned
 	}
+	torn := n.failWrites == 0
+	if torn {
+		src = src[:min(n.tearKeep, len(src))]
+	} else if n.failWrites > 0 {
+		n.failWrites--
+	}
+	// Programming moves bits away from the erase value; a bit already
+	// programmed cannot return to it.
 	start := int(addr)
+	erased := n.geometry.EraseValue
 	for i, b := range src {
 		old := n.data[start+i]
-		if old&b != b {
+		if (old^erased)&^(b^erased) != 0 {
 			return 0, ErrNotErased
 		}
 	}
 	for i, b := range src {
-		n.data[start+i] &= b
+		n.data[start+i] = erased ^ (n.data[start+i] ^ erased | b ^ erased)
+	}
+	if torn {
+		return 0, ErrInjected
 	}
 	return len(src), nil
 }
@@ -102,11 +112,22 @@ func (n *NOR) FailAfterWrites(allowed int) {
 	n.failWrites = allowed
 }
 
+// TearAfterWrites injects a failure after allowed successful writes, like
+// FailAfterWrites, but the failing write programs its first keep bytes, as
+// when power is lost while programming.
+func (n *NOR) TearAfterWrites(allowed int, keep int) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.failWrites = allowed
+	n.tearKeep = keep
+}
+
 // ClearFailures disables injected failures.
 func (n *NOR) ClearFailures() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.failWrites = -1
+	n.tearKeep = 0
 }
 
 // CorruptByte clears bits at addr without enforcing alignment.
@@ -150,4 +171,8 @@ func (n *NOR) EraseCount(block int) (uint64, error) {
 		return 0, ErrOutOfRange
 	}
 	return n.eraseCounts[block], nil
+}
+
+func (n *NOR) inRange(addr int64, size int) bool {
+	return addr >= 0 && addr <= int64(len(n.data)) && int64(size) <= int64(len(n.data))-addr
 }

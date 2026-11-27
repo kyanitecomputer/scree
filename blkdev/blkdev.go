@@ -18,6 +18,8 @@ type BlockDevice interface {
 	BlockSize() int
 	BlockCount() int
 	WriteSize() int
+	// EraseValue returns the value of every byte of an erased block.
+	EraseValue() byte
 	ReadAt(block int, off int, dst []byte) error
 	WriteAt(block int, off int, src []byte) error
 	EraseBlock(block int) error
@@ -44,7 +46,7 @@ func CheckRange(dev BlockDevice, block int, off int, n int) error {
 	if err := Validate(dev); err != nil {
 		return err
 	}
-	if block < 0 || block >= dev.BlockCount() || off < 0 || n < 0 || off+n > dev.BlockSize() {
+	if block < 0 || block >= dev.BlockCount() || off < 0 || n < 0 || off > dev.BlockSize() || n > dev.BlockSize()-off {
 		return ErrOutOfRange
 	}
 	return nil

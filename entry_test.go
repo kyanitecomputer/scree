@@ -1,6 +1,9 @@
 package scree
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestAppendSyncRemountLoad(t *testing.T) {
 	dev := newFormattedDevice(t, FormatOptions{})
@@ -8,7 +11,8 @@ func TestAppendSyncRemountLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
-	seq, err := store.Append(1, &Entry{Subject: "foo", Header: []byte("h"), Payload: []byte("hello"), Timestamp: 42})
+	ns := createNamespace(t, store, "test")
+	seq, err := store.Append(ns, &Entry{Subject: "foo", Header: []byte("h"), Payload: []byte("hello"), Timestamp: 42})
 	if err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
@@ -23,7 +27,7 @@ func TestAppendSyncRemountLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() reopened error = %v", err)
 	}
-	entry, err := reopened.LoadEntry(1, seq)
+	entry, err := reopened.LoadEntry(ns, seq)
 	if err != nil {
 		t.Fatalf("LoadEntry() error = %v", err)
 	}
@@ -40,5 +44,32 @@ func TestAppendReadOnly(t *testing.T) {
 	}
 	if _, err := store.Append(1, &Entry{}); err != ErrReadOnly {
 		t.Fatalf("Append() error = %v, want %v", err, ErrReadOnly)
+	}
+}
+
+func TestInvalidArguments(t *testing.T) {
+	dev := newFormattedDevice(t, FormatOptions{})
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	id, err := store.CreateNamespace("stream")
+	if err != nil {
+		t.Fatalf("CreateNamespace() error = %v", err)
+	}
+	if _, err := store.CreateNamespace(""); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("CreateNamespace(\"\") error = %v, want %v", err, ErrInvalidArgument)
+	}
+	if _, err := store.Append(id, nil); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("Append(nil) error = %v, want %v", err, ErrInvalidArgument)
+	}
+	if _, err := store.Append(id, &Entry{Payload: make([]byte, dev.WriteSize())}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("Append(oversized) error = %v, want %v", err, ErrInvalidArgument)
+	}
+	if err := store.PutMeta(id, "", nil); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("PutMeta(\"\") error = %v, want %v", err, ErrInvalidArgument)
+	}
+	if err := store.DeleteMeta(id, ""); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("DeleteMeta(\"\") error = %v, want %v", err, ErrInvalidArgument)
 	}
 }
