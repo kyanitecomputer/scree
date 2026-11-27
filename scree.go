@@ -100,7 +100,8 @@ func newStore(dev blkdev.BlockDevice, sb superblock, master masterNode) *Store {
 	}
 }
 
-// Stats returns storage statistics.
+// Stats returns storage statistics. They come from the layout fixed at
+// format time, so they need no error and stay available after Close.
 func (s *Store) Stats() StoreStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
