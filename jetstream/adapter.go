@@ -195,14 +195,19 @@ func (s *streamStore) RemoveMsg(seq uint64) (bool, error) {
 func (s *streamStore) EraseMsg(seq uint64) (bool, error) { return s.RemoveMsg(seq) }
 
 func (s *streamStore) Purge() (uint64, error) {
-	last, _ := s.store.LastSequence(s.ns)
-	return last, s.store.Purge(s.ns)
+	return s.store.Purge(s.ns)
 }
 
 func (s *streamStore) PurgeEx(subject string, seq, keep uint64) (uint64, error) { return s.Purge() }
-func (s *streamStore) Compact(seq uint64) (uint64, error)                       { return seq, s.store.PurgeUpTo(s.ns, seq) }
-func (s *streamStore) Truncate(seq uint64) error                                { return s.store.PurgeUpTo(s.ns, seq) }
-func (s *streamStore) GetSeqFromTime(t time.Time) uint64                        { return 0 }
+func (s *streamStore) Compact(seq uint64) (uint64, error) {
+	_, err := s.store.PurgeUpTo(s.ns, seq)
+	return seq, err
+}
+func (s *streamStore) Truncate(seq uint64) error {
+	_, err := s.store.PurgeUpTo(s.ns, seq)
+	return err
+}
+func (s *streamStore) GetSeqFromTime(t time.Time) uint64 { return 0 }
 
 func (s *streamStore) FilteredState(seq uint64, subject string) (server.SimpleState, error) {
 	state := server.SimpleState{}
@@ -323,8 +328,11 @@ func (s *streamStore) RegisterProcessJetStreamMsg(cb server.ProcessJetStreamMsgH
 	s.process = cb
 }
 func (s *streamStore) UpdateConfig(cfg *server.StreamConfig) error { return nil }
-func (s *streamStore) Delete(inline bool) error                    { return s.store.Purge(s.ns) }
-func (s *streamStore) Stop() error                                 { return s.store.Close() }
+func (s *streamStore) Delete(inline bool) error {
+	_, err := s.store.Purge(s.ns)
+	return err
+}
+func (s *streamStore) Stop() error { return s.store.Close() }
 
 func (s *streamStore) ConsumerStore(name string, created time.Time, cfg *server.ConsumerConfig) (server.ConsumerStore, error) {
 	if name == "" || cfg == nil {

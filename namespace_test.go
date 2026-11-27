@@ -83,10 +83,10 @@ func TestWritesNeedNamespace(t *testing.T) {
 	if err := store.DeleteMeta(ns, "k"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("DeleteMeta() error = %v, want %v", err, ErrNotFound)
 	}
-	if err := store.Purge(ns); !errors.Is(err, ErrNotFound) {
+	if _, err := store.Purge(ns); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("Purge() error = %v, want %v", err, ErrNotFound)
 	}
-	if err := store.PurgeUpTo(ns, 1); !errors.Is(err, ErrNotFound) {
+	if _, err := store.PurgeUpTo(ns, 1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("PurgeUpTo() error = %v, want %v", err, ErrNotFound)
 	}
 }

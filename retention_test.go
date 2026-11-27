@@ -1,6 +1,10 @@
 package scree
 
-import "testing"
+import (
+	"errors"
+	"math"
+	"testing"
+)
 
 func TestSubjectLookupAndRetention(t *testing.T) {
 	dev := newFormattedDevice(t, FormatOptions{})
@@ -37,8 +41,8 @@ func TestSubjectLookupAndRetention(t *testing.T) {
 	if err != nil || first != 2 {
 		t.Fatalf("FirstSequence() after remove = %d, %v, want 2, nil", first, err)
 	}
-	if err := store.PurgeUpTo(ns, 2); err != nil {
-		t.Fatalf("PurgeUpTo() error = %v", err)
+	if n, err := store.PurgeUpTo(ns, 2); err != nil || n != 1 {
+		t.Fatalf("PurgeUpTo() = %d, %v, want 1, nil", n, err)
 	}
 	first, err = store.FirstSequence(ns)
 	if err != nil || first != 3 {
@@ -90,8 +94,8 @@ func TestPurgeKeepsSequence(t *testing.T) {
 			t.Fatalf("Append() error = %v", err)
 		}
 	}
-	if err := store.Purge(ns); err != nil {
-		t.Fatalf("Purge() error = %v", err)
+	if n, err := store.Purge(ns); err != nil || n != 2 {
+		t.Fatalf("Purge() = %d, %v, want 2, nil", n, err)
 	}
 	if last, err := store.LastSequence(ns); err != nil || last != 2 {
 		t.Fatalf("LastSequence() = %d, %v, want 2, nil", last, err)
@@ -105,5 +109,36 @@ func TestPurgeKeepsSequence(t *testing.T) {
 	}
 	if seq, err := reopened.Append(ns, &Entry{Subject: "a"}); err != nil || seq != 4 {
 		t.Fatalf("Append() after remount = %d, %v, want 4, nil", seq, err)
+	}
+}
+
+func TestPurgeUpToWritesOneRecord(t *testing.T) {
+	dev := newFormattedDevice(t, FormatOptions{JournalBlocks: 1})
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	ns := createNamespace(t, store, "test")
+	for range 5 {
+		if _, err := store.Append(ns, &Entry{Subject: "a"}); err != nil {
+			t.Fatalf("Append() error = %v", err)
+		}
+	}
+	before := store.journal.nextUnit
+	if n, err := store.PurgeUpTo(ns, math.MaxUint64); err != nil || n != 5 {
+		t.Fatalf("PurgeUpTo(MaxUint64) = %d, %v, want 5, nil", n, err)
+	}
+	if units := store.journal.nextUnit - before; units != 1 {
+		t.Fatalf("PurgeUpTo() wrote %d journal units, want 1", units)
+	}
+	if n, err := store.PurgeUpTo(ns, math.MaxUint64); err != nil || n != 0 {
+		t.Fatalf("PurgeUpTo() again = %d, %v, want 0, nil", n, err)
+	}
+	reopened, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() reopened error = %v", err)
+	}
+	if _, err := reopened.FirstSequence(ns); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("FirstSequence() after remount error = %v, want %v", err, ErrNotFound)
 	}
 }

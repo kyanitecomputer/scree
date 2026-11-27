@@ -11,8 +11,9 @@ import (
 const journalTypeEntry = uint16(1)
 
 const (
-	journalTypeEntryRemove    = uint16(6)
-	journalTypeNamespacePurge = uint16(7)
+	journalTypeEntryRemove        = uint16(6)
+	journalTypeNamespacePurge     = uint16(7)
+	journalTypeNamespacePurgeUpTo = uint16(8)
 )
 
 // entryHeaderSize is the size of an entry record before its subject: the
@@ -156,40 +157,65 @@ func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 	return nil
 }
 
-// Purge removes all entries from a namespace. The next entry gets the
-// sequence after the last one assigned.
-func (s *Store) Purge(ns NamespaceID) error {
+// Purge removes all entries from a namespace and returns how many it
+// removed. The next entry gets the sequence after the last one assigned.
+func (s *Store) Purge(ns NamespaceID) (uint64, error) {
 	if s.readOnly {
-		return ErrReadOnly
+		return 0, ErrReadOnly
 	}
 	if err := s.checkNamespace(ns); err != nil {
-		return err
+		return 0, err
+	}
+	if len(s.entries[ns]) == 0 {
+		return 0, nil
 	}
 	data := make([]byte, 8)
 	binary.LittleEndian.PutUint64(data, uint64(ns))
 	if err := s.journal.append(journalEntry{Type: journalTypeNamespacePurge, Data: data}); err != nil {
-		return err
+		return 0, err
 	}
-	s.entries[ns] = make(map[uint64]StoredEntry)
-	return nil
+	return s.applyPurgeUpTo(ns, math.MaxUint64), nil
 }
 
-// PurgeUpTo removes entries with sequence numbers less than or equal to seq.
-func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) error {
+// PurgeUpTo removes the entries with sequence numbers less than or equal to
+// seq, in one journal record, and returns how many it removed.
+func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 	if s.readOnly {
-		return ErrReadOnly
+		return 0, ErrReadOnly
 	}
 	if err := s.checkNamespace(ns); err != nil {
-		return err
+		return 0, err
 	}
-	for cur := uint64(1); cur <= seq; cur++ {
-		if _, ok := s.entries[ns][cur]; ok {
-			if err := s.RemoveEntry(ns, cur); err != nil {
-				return err
-			}
+	found := false
+	for cur := range s.entries[ns] {
+		if cur <= seq {
+			found = true
+			break
 		}
 	}
-	return nil
+	if !found {
+		return 0, nil
+	}
+	data := make([]byte, 16)
+	binary.LittleEndian.PutUint64(data, uint64(ns))
+	binary.LittleEndian.PutUint64(data[8:], seq)
+	if err := s.journal.append(journalEntry{Type: journalTypeNamespacePurgeUpTo, Data: data}); err != nil {
+		return 0, err
+	}
+	return s.applyPurgeUpTo(ns, seq), nil
+}
+
+// applyPurgeUpTo removes the entries of ns up to seq and returns how many it
+// removed.
+func (s *Store) applyPurgeUpTo(ns NamespaceID, seq uint64) uint64 {
+	var n uint64
+	for cur := range s.entries[ns] {
+		if cur <= seq {
+			delete(s.entries[ns], cur)
+			n++
+		}
+	}
+	return n
 }
 
 // Sync commits pending writes to the underlying block device.
@@ -257,8 +283,12 @@ func (s *Store) applyRecord(entry journalEntry) error {
 		if len(entry.Data) < 8 {
 			return ErrCorrupt
 		}
-		ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
-		s.entries[ns] = make(map[uint64]StoredEntry)
+		s.applyPurgeUpTo(NamespaceID(binary.LittleEndian.Uint64(entry.Data)), math.MaxUint64)
+	case journalTypeNamespacePurgeUpTo:
+		if len(entry.Data) < 16 {
+			return ErrCorrupt
+		}
+		s.applyPurgeUpTo(NamespaceID(binary.LittleEndian.Uint64(entry.Data)), binary.LittleEndian.Uint64(entry.Data[8:]))
 	default:
 		return fmt.Errorf("%w: journal record type %d", ErrUnsupportedFormat, entry.Type)
 	}
