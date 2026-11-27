@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/nats-io/nats-server/v2 v2.12.1
+	github.com/nats-io/nats.go v1.55.0
 	src.kyanite.computer/scree v0.0.0-00010101000000-000000000000
 )
 
