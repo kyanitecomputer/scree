@@ -2,7 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"hash/crc32"
 	"math"
 
@@ -142,8 +142,5 @@ func mountSuperblock(dev blkdev.BlockDevice) (superblock, error) {
 	if backupErr == nil {
 		return backup, nil
 	}
-	if errors.Is(err, ErrUnsupportedFormat) || errors.Is(backupErr, ErrUnsupportedFormat) {
-		return superblock{}, ErrUnsupportedFormat
-	}
-	return superblock{}, ErrCorrupt
+	return superblock{}, fmt.Errorf("primary superblock: %w; backup superblock: %w", err, backupErr)
 }

@@ -182,3 +182,31 @@ func TestMountRejectsJournalOutsideDevice(t *testing.T) {
 		t.Fatalf("Mount() error = %v, want %v", err, ErrCorrupt)
 	}
 }
+
+var errTestIO = errors.New("test I/O error")
+
+// failingReadDevice fails reads of the blocks in fail.
+type failingReadDevice struct {
+	blkdev.BlockDevice
+	fail map[int]bool
+}
+
+func (d failingReadDevice) ReadAt(block int, off int, dst []byte) error {
+	if d.fail[block] {
+		return errTestIO
+	}
+	return d.BlockDevice.ReadAt(block, off, dst)
+}
+
+func TestMountReportsReadErrors(t *testing.T) {
+	dev := newFormattedDevice(t, FormatOptions{})
+	if _, err := Mount(failingReadDevice{dev, map[int]bool{0: true, 1: true}}, MountOptions{}); !errors.Is(err, errTestIO) {
+		t.Fatalf("Mount() with unreadable superblocks error = %v, want %v", err, errTestIO)
+	}
+	if _, err := Mount(failingReadDevice{dev, map[int]bool{2: true, 3: true}}, MountOptions{}); !errors.Is(err, errTestIO) {
+		t.Fatalf("Mount() with unreadable masters error = %v, want %v", err, errTestIO)
+	}
+	if _, err := Mount(failingReadDevice{dev, map[int]bool{0: true, 2: true}}, MountOptions{}); err != nil {
+		t.Fatalf("Mount() with readable backups error = %v", err)
+	}
+}

@@ -2,7 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"hash/crc32"
 
 	"src.kyanite.computer/scree/blkdev"
@@ -76,10 +76,7 @@ func mountMaster(dev blkdev.BlockDevice) (masterNode, error) {
 	if errB == nil {
 		return b, nil
 	}
-	if errors.Is(errA, ErrUnsupportedFormat) || errors.Is(errB, ErrUnsupportedFormat) {
-		return masterNode{}, ErrUnsupportedFormat
-	}
-	return masterNode{}, ErrCorrupt
+	return masterNode{}, fmt.Errorf("primary master: %w; backup master: %w", errA, errB)
 }
 
 func validateMaster(sb superblock, m masterNode) error {
