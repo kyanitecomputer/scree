@@ -76,11 +76,11 @@ func TestMountAuthStrictRequiresKey(t *testing.T) {
 }
 
 func TestNilDevice(t *testing.T) {
-	if err := Format(nil, FormatOptions{}); err != ErrUnsupportedFormat {
-		t.Fatalf("Format(nil) error = %v, want %v", err, ErrUnsupportedFormat)
+	if err := Format(nil, FormatOptions{}); !errors.Is(err, blkdev.ErrInvalidGeometry) {
+		t.Fatalf("Format(nil) error = %v, want %v", err, blkdev.ErrInvalidGeometry)
 	}
-	if _, err := Mount(nil, MountOptions{}); err != ErrUnsupportedFormat {
-		t.Fatalf("Mount(nil) error = %v, want %v", err, ErrUnsupportedFormat)
+	if _, err := Mount(nil, MountOptions{}); !errors.Is(err, blkdev.ErrInvalidGeometry) {
+		t.Fatalf("Mount(nil) error = %v, want %v", err, blkdev.ErrInvalidGeometry)
 	}
 }
 

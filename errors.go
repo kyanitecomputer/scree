@@ -20,4 +20,8 @@ var (
 
 	// ErrNotFound reports that a requested namespace or entry does not exist.
 	ErrNotFound = errors.New("scree: not found")
+
+	// ErrInvalidArgument reports an argument that cannot be stored, such as
+	// an empty name or a record too large for a journal unit.
+	ErrInvalidArgument = errors.New("scree: invalid argument")
 )

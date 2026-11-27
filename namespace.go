@@ -22,7 +22,7 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 		return 0, ErrReadOnly
 	}
 	if name == "" {
-		return 0, ErrNotFound
+		return 0, ErrInvalidArgument
 	}
 	if id, ok := s.nsByName[name]; ok {
 		return id, nil

@@ -44,7 +44,10 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
-	if ns == 0 || entry == nil {
+	if entry == nil {
+		return 0, ErrInvalidArgument
+	}
+	if ns == 0 {
 		return 0, ErrNotFound
 	}
 	seq := s.lastSeq[ns] + 1
@@ -255,7 +258,7 @@ func (s *Store) applyEntry(record entryRecord) {
 
 func encodeEntryRecord(record entryRecord) ([]byte, error) {
 	if len(record.Subject) > 1<<16-1 {
-		return nil, ErrUnsupportedFormat
+		return nil, ErrInvalidArgument
 	}
 	buf := bytes.NewBuffer(make([]byte, 0, 32+len(record.Subject)+len(record.Header)+len(record.Payload)))
 	write := func(v any) error { return binary.Write(buf, binary.LittleEndian, v) }

@@ -19,9 +19,6 @@ type Store struct {
 
 // Format initializes a Scree volume on a block device.
 func Format(dev blkdev.BlockDevice, opts FormatOptions) error {
-	if dev == nil {
-		return ErrUnsupportedFormat
-	}
 	if err := blkdev.Validate(dev); err != nil {
 		return err
 	}
@@ -55,9 +52,6 @@ func Format(dev blkdev.BlockDevice, opts FormatOptions) error {
 
 // Mount opens an existing Scree volume on a block device.
 func Mount(dev blkdev.BlockDevice, opts MountOptions) (*Store, error) {
-	if dev == nil {
-		return nil, ErrUnsupportedFormat
-	}
 	if err := blkdev.Validate(dev); err != nil {
 		return nil, err
 	}

@@ -16,7 +16,7 @@ func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 		return ErrReadOnly
 	}
 	if key == "" {
-		return ErrNotFound
+		return ErrInvalidArgument
 	}
 	record := encodeMetaRecord(ns, key, data)
 	if err := s.journal.append(journalEntry{Type: journalTypeMetaPut, Data: record}); err != nil {
@@ -54,6 +54,9 @@ func (s *Store) MetaKeys(ns NamespaceID) ([]string, error) {
 func (s *Store) DeleteMeta(ns NamespaceID, key string) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	if key == "" {
+		return ErrInvalidArgument
 	}
 	record := encodeMetaRecord(ns, key, nil)
 	if err := s.journal.append(journalEntry{Type: journalTypeMetaDelete, Data: record}); err != nil {

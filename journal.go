@@ -2,6 +2,7 @@ package scree
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 
 	"src.kyanite.computer/scree/blkdev"
@@ -47,7 +48,7 @@ func openJournal(dev blkdev.BlockDevice, sb superblock) (*journal, error) {
 
 func (j *journal) append(entry journalEntry) error {
 	if len(entry.Data) > j.writeUnit-journalOffsetData {
-		return ErrUnsupportedFormat
+		return fmt.Errorf("%w: record of %d bytes exceeds the journal unit", ErrInvalidArgument, len(entry.Data))
 	}
 	if j.nextUnit >= j.capacityUnits() {
 		return ErrNoSpace
