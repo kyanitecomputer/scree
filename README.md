@@ -39,7 +39,7 @@ Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
 - Free-space accounting is static after format; journal compaction and block reclamation are not implemented.
 - Entries currently live in the journal and are rebuilt into memory on mount.
 - Journal capacity is finite; writes return `ErrNoSpace` when reserved journal units are exhausted.
-- Authentication is only represented as a volume flag and mount policy check; data authentication is not implemented yet.
+- Authentication is not implemented yet: `Format` refuses `EnableAuth`, and `Mount` refuses volumes flagged as authenticated.
 - NAND support is defined at the driver interface level but does not have a block-device adapter yet.
 - The JetStream adapter is partial. Several advanced APIs are stubs or simplified, including snapshots, subject totals, wildcard/multi-subject filtering, time lookup, consumer persistence encoding, and utilization reporting.
 

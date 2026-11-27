@@ -65,14 +65,28 @@ func TestMountUnformatted(t *testing.T) {
 	}
 }
 
-func TestMountAuthStrictRequiresKey(t *testing.T) {
-	dev := newFormattedDevice(t, FormatOptions{EnableAuth: true})
-	_, err := Mount(dev, MountOptions{AuthFailureMode: AuthStrict})
-	if !errors.Is(err, ErrAuthenticationFailed) {
-		t.Fatalf("Mount() error = %v, want %v", err, ErrAuthenticationFailed)
+func TestAuthenticationIsRefused(t *testing.T) {
+	if err := Format(newDevice(t), FormatOptions{EnableAuth: true}); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Fatalf("Format(EnableAuth) error = %v, want %v", err, ErrUnsupportedFormat)
 	}
-	if _, err := Mount(dev, MountOptions{AuthFailureMode: AuthReportOnly}); err != nil {
-		t.Fatalf("Mount() report-only error = %v", err)
+	dev := newFormattedDevice(t, FormatOptions{})
+	sb, err := readSuperblock(dev, 0)
+	if err != nil {
+		t.Fatalf("readSuperblock() error = %v", err)
+	}
+	sb.Flags |= superFlagAuth
+	for block := range 2 {
+		if err := writeSuperblock(dev, block, sb); err != nil {
+			t.Fatalf("writeSuperblock(%d) error = %v", block, err)
+		}
+	}
+	for _, opts := range []MountOptions{
+		{AuthFailureMode: AuthStrict, AuthKey: []byte("key")},
+		{AuthFailureMode: AuthReportOnly},
+	} {
+		if _, err := Mount(dev, opts); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("Mount(%+v) error = %v, want %v", opts, err, ErrUnsupportedFormat)
+		}
 	}
 }
 

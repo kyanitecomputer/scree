@@ -72,7 +72,7 @@ func newSuperblock(dev blkdev.BlockDevice, opts FormatOptions) (superblock, erro
 	}
 	var flags uint32
 	if opts.EnableAuth {
-		flags |= superFlagAuth
+		return superblock{}, fmt.Errorf("%w: authenticated volumes are not implemented", ErrUnsupportedFormat)
 	}
 	return superblock{
 		BlockSize:     uint32(dev.BlockSize()),

@@ -1,6 +1,7 @@
 package scree
 
 import (
+	"fmt"
 	"sync"
 
 	"src.kyanite.computer/scree/blkdev"
@@ -74,8 +75,8 @@ func Mount(dev blkdev.BlockDevice, opts MountOptions) (*Store, error) {
 	if err := validateMaster(sb, master); err != nil {
 		return nil, err
 	}
-	if sb.Flags&superFlagAuth != 0 && len(opts.AuthKey) == 0 && opts.AuthFailureMode == AuthStrict {
-		return nil, ErrAuthenticationFailed
+	if sb.Flags&superFlagAuth != 0 {
+		return nil, fmt.Errorf("%w: authenticated volumes are not implemented", ErrUnsupportedFormat)
 	}
 	store := newStore(dev, sb, master)
 	store.readOnly = opts.ReadOnly
