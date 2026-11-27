@@ -3,6 +3,9 @@ package jetstream
 import (
 	"errors"
 	"io"
+	"iter"
+	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -70,7 +73,8 @@ type streamStore struct {
 	updates   server.StorageUpdateHandler
 	removes   server.StorageRemoveMsgHandler
 	process   server.ProcessJetStreamMsgHandler
-	consumers map[string]server.ConsumerStore
+	consumers []server.ConsumerStore
+	sources   map[string]server.StreamSourceState
 }
 
 func (s *streamStore) StoreMsg(subject string, hdr, msg []byte, ttl int64) (uint64, int64, error) {
@@ -151,6 +155,14 @@ func (s *streamStore) LoadLastMsg(subject string, sm *server.StoreMsg) (*server.
 	return nil, server.ErrStoreMsgNotFound
 }
 
+func (s *streamStore) LoadLastSeq(subject string) (uint64, error) {
+	sm, err := s.LoadLastMsg(subject, nil)
+	if err != nil {
+		return 0, err
+	}
+	return sm.Sequence(), nil
+}
+
 func (s *streamStore) LoadPrevMsg(filter string, wc bool, start uint64, sm *server.StoreMsg) (*server.StoreMsg, uint64, error) {
 	for seq := start; seq > 0; seq-- {
 		entry, err := s.store.LoadEntry(s.ns, seq)
@@ -218,6 +230,28 @@ func (s *streamStore) AllLastSeqs() ([]uint64, error) {
 func (s *streamStore) MultiLastSeqs(filters []string, maxSeq uint64, maxAllowed int) ([]uint64, error) {
 	return nil, nil
 }
+func (s *streamStore) MultiLastMsgs(filters []string, minSeq, maxSeq uint64, maxAllowed int, cb func(sm *server.StoreMsg, np uint64) bool) (uint64, uint64, error) {
+	seqs, err := s.MultiLastSeqs(filters, maxSeq, maxAllowed)
+	if err != nil || len(seqs) == 0 {
+		return 0, 0, err
+	}
+	total := uint64(len(seqs))
+	np := total
+	for _, seq := range seqs {
+		np--
+		if seq < minSeq {
+			continue
+		}
+		sm, err := s.LoadMsg(seq, nil)
+		if err != nil {
+			return total, np, err
+		}
+		if !cb(sm, np) {
+			break
+		}
+	}
+	return total, np, nil
+}
 func (s *streamStore) SubjectForSeq(seq uint64) (string, error) {
 	e, err := s.store.LoadEntry(s.ns, seq)
 	if err != nil {
@@ -258,7 +292,29 @@ func (s *streamStore) FastState(st *server.StreamState) {
 	}
 }
 
-func (s *streamStore) EncodedStreamState(failed uint64) ([]byte, error)           { return nil, nil }
+func (s *streamStore) EncodedStreamState(failed uint64, withSources bool) ([]byte, error) {
+	return nil, nil
+}
+
+// SourcesState returns the sourcing state last applied; the store does not
+// track the sources of the messages it stores.
+func (s *streamStore) SourcesState() map[string]server.StreamSourceState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if len(s.sources) == 0 {
+		return nil
+	}
+	return maps.Clone(s.sources)
+}
+
+func (s *streamStore) ApplySourcesState(sources map[string]server.StreamSourceState) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sources = maps.Clone(sources)
+}
+
+func (s *streamStore) Ready() {}
+
 func (s *streamStore) SyncDeleted(dbs server.DeleteBlocks) error                  { return nil }
 func (s *streamStore) Type() server.StorageType                                   { return s.storage }
 func (s *streamStore) RegisterStorageUpdates(cb server.StorageUpdateHandler)      { s.updates = cb }
@@ -271,18 +327,37 @@ func (s *streamStore) Delete(inline bool) error                    { return s.st
 func (s *streamStore) Stop() error                                 { return s.store.Close() }
 
 func (s *streamStore) ConsumerStore(name string, created time.Time, cfg *server.ConsumerConfig) (server.ConsumerStore, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.consumers == nil {
-		s.consumers = make(map[string]server.ConsumerStore)
+	if name == "" || cfg == nil {
+		return nil, errors.New("jetstream: bad consumer config")
 	}
-	cs := &consumerStore{storage: s.storage}
-	s.consumers[name] = cs
+	cs := &consumerStore{stream: s, name: name, cfg: *cfg, storage: s.storage}
+	if err := s.AddConsumer(cs); err != nil {
+		return nil, err
+	}
 	return cs, nil
 }
 
-func (s *streamStore) AddConsumer(o server.ConsumerStore) error    { return nil }
-func (s *streamStore) RemoveConsumer(o server.ConsumerStore) error { return nil }
+func (s *streamStore) AddConsumer(o server.ConsumerStore) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.consumers = append(s.consumers, o)
+	return nil
+}
+
+func (s *streamStore) RemoveConsumer(o server.ConsumerStore) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.consumers = slices.DeleteFunc(s.consumers, func(c server.ConsumerStore) bool { return c == o })
+	return nil
+}
+
+func (s *streamStore) Consumers() iter.Seq[server.ConsumerStore] {
+	s.mu.RLock()
+	consumers := slices.Clone(s.consumers)
+	s.mu.RUnlock()
+	return slices.Values(consumers)
+}
+
 func (s *streamStore) Snapshot(deadline time.Duration, includeConsumers, checkMsgs bool) (*server.SnapshotResult, error) {
 	return &server.SnapshotResult{Reader: io.NopCloser(&emptyReader{}), State: s.State()}, nil
 }
@@ -290,6 +365,9 @@ func (s *streamStore) Utilization() (uint64, uint64, error) { return 0, 0, nil }
 func (s *streamStore) ResetState()                          {}
 
 type consumerStore struct {
+	stream  *streamStore
+	name    string
+	cfg     server.ConsumerConfig
 	storage server.StorageType
 	state   server.ConsumerState
 }
@@ -309,14 +387,24 @@ func (c *consumerStore) UpdateDelivered(dseq, sseq, dc uint64, ts int64) error {
 	c.state.Delivered.Stream = sseq
 	return nil
 }
-func (c *consumerStore) UpdateAcks(dseq, sseq uint64) error {
+func (c *consumerStore) UpdateAcks(dseq, sseq uint64, explicit bool) error {
 	c.state.AckFloor.Consumer = dseq
 	c.state.AckFloor.Stream = sseq
 	return nil
 }
-func (c *consumerStore) RemoveRedeliveredBelow(seq uint64)             {}
-func (c *consumerStore) UpdateConfig(cfg *server.ConsumerConfig) error { return nil }
-func (c *consumerStore) Update(state *server.ConsumerState) error      { return c.ForceUpdate(state) }
+func (c *consumerStore) RemoveRedeliveredBelow(seq uint64) {}
+func (c *consumerStore) GetConfig() *server.ConsumerConfig {
+	cfg := c.cfg
+	cfg.Name = c.name
+	return &cfg
+}
+func (c *consumerStore) UpdateConfig(cfg *server.ConsumerConfig) error {
+	if cfg != nil {
+		c.cfg = *cfg
+	}
+	return nil
+}
+func (c *consumerStore) Update(state *server.ConsumerState) error { return c.ForceUpdate(state) }
 func (c *consumerStore) ForceUpdate(state *server.ConsumerState) error {
 	if state != nil {
 		c.state = *state
@@ -327,8 +415,8 @@ func (c *consumerStore) State() (*server.ConsumerState, error)       { st := c.s
 func (c *consumerStore) BorrowState() (*server.ConsumerState, error) { return c.State() }
 func (c *consumerStore) EncodedState() ([]byte, error)               { return nil, nil }
 func (c *consumerStore) Type() server.StorageType                    { return c.storage }
-func (c *consumerStore) Stop() error                                 { return nil }
-func (c *consumerStore) Delete() error                               { c.state = server.ConsumerState{}; return nil }
+func (c *consumerStore) Stop() error                                 { return c.stream.RemoveConsumer(c) }
+func (c *consumerStore) Delete() error                               { c.state = server.ConsumerState{}; return c.Stop() }
 func (c *consumerStore) StreamDelete() error                         { return c.Delete() }
 
 type emptyReader struct{}
