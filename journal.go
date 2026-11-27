@@ -70,7 +70,6 @@ func (j *journal) append(entry journalEntry) error {
 	binary.LittleEndian.PutUint16(buf[journalOffsetMagic:], journalMagic)
 	binary.LittleEndian.PutUint16(buf[journalOffsetType:], uint16(entry.Type))
 	binary.LittleEndian.PutUint32(buf[journalOffsetLength:], uint32(len(entry.Data)))
-	binary.LittleEndian.PutUint32(buf[journalOffsetCRC:], 0)
 	copy(buf[journalOffsetData:], entry.Data)
 	binary.LittleEndian.PutUint32(buf[journalOffsetCRC:], journalCRC(buf, len(entry.Data)))
 	block, off := j.location(j.nextUnit)
@@ -140,11 +139,14 @@ func (j *journal) decodeUnit(buf []byte) (journalEntry, bool) {
 	return journalEntry{Type: recordType(binary.LittleEndian.Uint16(buf[journalOffsetType:])), Data: data}, true
 }
 
+var zeroCRC [journalOffsetData - journalOffsetCRC]byte
+
+// journalCRC returns the CRC of a unit's record from its type to the end of
+// its data, with the CRC field taken as zero.
 func journalCRC(buf []byte, length int) uint32 {
-	crcBuf := make([]byte, journalOffsetData+length-journalOffsetType)
-	copy(crcBuf, buf[journalOffsetType:journalOffsetData+length])
-	binary.LittleEndian.PutUint32(crcBuf[journalOffsetCRC-journalOffsetType:], 0)
-	return crc32.ChecksumIEEE(crcBuf)
+	crc := crc32.Update(0, crc32.IEEETable, buf[journalOffsetType:journalOffsetCRC])
+	crc = crc32.Update(crc, crc32.IEEETable, zeroCRC[:])
+	return crc32.Update(crc, crc32.IEEETable, buf[journalOffsetData:journalOffsetData+length])
 }
 
 func (j *journal) capacityUnits() int {
