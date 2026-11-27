@@ -197,57 +197,65 @@ func (s *Store) replayEntries() error {
 		return err
 	}
 	for _, entry := range entries {
-		switch entry.Type {
-		case journalTypeEntry:
-			record, err := decodeEntryRecord(entry.Data)
-			if err != nil {
-				return err
-			}
-			s.applyEntry(record)
-		case journalTypeNamespaceCreate:
-			id, name, err := decodeNamespaceRecord(entry.Data)
-			if err != nil {
-				return err
-			}
-			s.applyNamespaceCreate(id, name)
-		case journalTypeNamespaceDelete:
-			if len(entry.Data) < 8 {
-				return ErrCorrupt
-			}
-			s.applyNamespaceDelete(NamespaceID(binary.LittleEndian.Uint64(entry.Data)))
-		case journalTypeMetaPut:
-			ns, key, data, err := decodeMetaRecord(entry.Data)
-			if err != nil {
-				return err
-			}
-			s.applyMetaPut(ns, key, data)
-		case journalTypeMetaDelete:
-			ns, key, _, err := decodeMetaRecord(entry.Data)
-			if err != nil {
-				return err
-			}
-			if s.meta[ns] != nil {
-				delete(s.meta[ns], key)
-			}
-		case journalTypeEntryRemove:
-			if len(entry.Data) < 16 {
-				return ErrCorrupt
-			}
-			ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
-			seq := binary.LittleEndian.Uint64(entry.Data[8:])
-			if s.entries[ns] != nil {
-				delete(s.entries[ns], seq)
-			}
-		case journalTypeNamespacePurge:
-			if len(entry.Data) < 8 {
-				return ErrCorrupt
-			}
-			ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
-			s.entries[ns] = make(map[uint64]StoredEntry)
-			s.lastSeq[ns] = 0
-		default:
-			continue
+		if err := s.applyRecord(entry); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// applyRecord applies a journal record to the in-memory state.
+func (s *Store) applyRecord(entry journalEntry) error {
+	switch entry.Type {
+	case journalTypeEntry:
+		record, err := decodeEntryRecord(entry.Data)
+		if err != nil {
+			return err
+		}
+		s.applyEntry(record)
+	case journalTypeNamespaceCreate:
+		id, name, err := decodeNamespaceRecord(entry.Data)
+		if err != nil {
+			return err
+		}
+		s.applyNamespaceCreate(id, name)
+	case journalTypeNamespaceDelete:
+		if len(entry.Data) < 8 {
+			return ErrCorrupt
+		}
+		s.applyNamespaceDelete(NamespaceID(binary.LittleEndian.Uint64(entry.Data)))
+	case journalTypeMetaPut:
+		ns, key, data, err := decodeMetaRecord(entry.Data)
+		if err != nil {
+			return err
+		}
+		s.applyMetaPut(ns, key, data)
+	case journalTypeMetaDelete:
+		ns, key, _, err := decodeMetaRecord(entry.Data)
+		if err != nil {
+			return err
+		}
+		if s.meta[ns] != nil {
+			delete(s.meta[ns], key)
+		}
+	case journalTypeEntryRemove:
+		if len(entry.Data) < 16 {
+			return ErrCorrupt
+		}
+		ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
+		seq := binary.LittleEndian.Uint64(entry.Data[8:])
+		if s.entries[ns] != nil {
+			delete(s.entries[ns], seq)
+		}
+	case journalTypeNamespacePurge:
+		if len(entry.Data) < 8 {
+			return ErrCorrupt
+		}
+		ns := NamespaceID(binary.LittleEndian.Uint64(entry.Data))
+		s.entries[ns] = make(map[uint64]StoredEntry)
+		s.lastSeq[ns] = 0
+	default:
+		return fmt.Errorf("%w: journal record type %d", ErrUnsupportedFormat, entry.Type)
 	}
 	return nil
 }

@@ -90,6 +90,22 @@ func (j *journal) replay() (entries []journalEntry, bad int, err error) {
 	return entries, bad, nil
 }
 
+// checkErased reports ErrCorrupt if a unit after the end of the journal is
+// programmed.
+func (j *journal) checkErased() error {
+	buf := make([]byte, j.writeUnit)
+	for unit := j.nextUnit; unit < j.capacityUnits(); unit++ {
+		block, off := j.location(unit)
+		if err := j.dev.ReadAt(block, off, buf); err != nil {
+			return err
+		}
+		if !isErased(buf) {
+			return fmt.Errorf("%w: journal unit %d is programmed after the end of the journal", ErrCorrupt, unit)
+		}
+	}
+	return nil
+}
+
 // decodeUnit returns the record of a programmed unit, if it holds a valid one.
 func (j *journal) decodeUnit(buf []byte) (journalEntry, bool) {
 	if binary.LittleEndian.Uint16(buf[journalOffsetMagic:]) != journalMagic {

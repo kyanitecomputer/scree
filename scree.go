@@ -72,7 +72,16 @@ func Mount(dev blkdev.BlockDevice, opts MountOptions) (*Store, error) {
 	if sb.Flags&superFlagAuth != 0 && len(opts.AuthKey) == 0 && opts.AuthFailureMode == AuthStrict {
 		return nil, ErrAuthenticationFailed
 	}
-	store := &Store{
+	store := newStore(dev, sb, master)
+	store.readOnly = opts.ReadOnly
+	if err := store.replayEntries(); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func newStore(dev blkdev.BlockDevice, sb superblock, master masterNode) *Store {
+	return &Store{
 		dev:        dev,
 		super:      sb,
 		master:     master,
@@ -83,12 +92,7 @@ func Mount(dev blkdev.BlockDevice, opts MountOptions) (*Store, error) {
 		entries:    make(map[NamespaceID]map[uint64]StoredEntry),
 		lastSeq:    make(map[NamespaceID]uint64),
 		meta:       make(map[NamespaceID]map[string][]byte),
-		readOnly:   opts.ReadOnly,
 	}
-	if err := store.replayEntries(); err != nil {
-		return nil, err
-	}
-	return store, nil
 }
 
 // Stats returns storage statistics.
