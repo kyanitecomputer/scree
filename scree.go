@@ -55,6 +55,9 @@ func Mount(dev blkdev.BlockDevice, opts MountOptions) (*Store, error) {
 	if err := blkdev.Validate(dev); err != nil {
 		return nil, err
 	}
+	if err := checkUnitSize(dev); err != nil {
+		return nil, err
+	}
 	sb, err := mountSuperblock(dev)
 	if err != nil {
 		return nil, err

@@ -36,7 +36,7 @@ func openJournal(dev blkdev.BlockDevice, sb superblock) (*journal, error) {
 		dev:       dev,
 		start:     int(sb.JournalStart),
 		blocks:    int(sb.JournalBlocks),
-		writeUnit: dev.WriteSize(),
+		writeUnit: unitSize(dev.WriteSize()),
 	}
 	entries, err := j.replay()
 	if err != nil {

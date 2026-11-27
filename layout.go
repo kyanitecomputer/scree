@@ -37,7 +37,24 @@ type superblock struct {
 	Flags         uint32
 }
 
+// unitSize returns the size superblocks, master nodes and journal records are
+// written in: the smallest multiple of the write size that holds a superblock.
+func unitSize(writeSize int) int {
+	return (superSize + writeSize - 1) / writeSize * writeSize
+}
+
+// checkUnitSize rejects devices whose erase blocks cannot hold a unit.
+func checkUnitSize(dev blkdev.BlockDevice) error {
+	if unitSize(dev.WriteSize()) > dev.BlockSize() {
+		return ErrUnsupportedFormat
+	}
+	return nil
+}
+
 func newSuperblock(dev blkdev.BlockDevice, opts FormatOptions) (superblock, error) {
+	if err := checkUnitSize(dev); err != nil {
+		return superblock{}, err
+	}
 	if dev.BlockCount() < minBlockCount {
 		return superblock{}, ErrUnsupportedFormat
 	}
@@ -63,7 +80,7 @@ func newSuperblock(dev blkdev.BlockDevice, opts FormatOptions) (superblock, erro
 }
 
 func writeSuperblock(dev blkdev.BlockDevice, block int, sb superblock) error {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	copy(buf[superOffsetMagic:], superMagic)
 	binary.LittleEndian.PutUint32(buf[superOffsetVersion:], superVersion)
 	binary.LittleEndian.PutUint32(buf[superOffsetBlockSize:], sb.BlockSize)
@@ -80,7 +97,7 @@ func writeSuperblock(dev blkdev.BlockDevice, block int, sb superblock) error {
 }
 
 func readSuperblock(dev blkdev.BlockDevice, block int) (superblock, error) {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	if err := dev.ReadAt(block, 0, buf); err != nil {
 		return superblock{}, err
 	}

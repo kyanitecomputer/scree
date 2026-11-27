@@ -105,3 +105,51 @@ func newFormattedDevice(t *testing.T, opts FormatOptions) blkdev.BlockDevice {
 	}
 	return dev
 }
+
+func TestSmallWriteSize(t *testing.T) {
+	for _, pageSize := range []int{1, 8, 32} {
+		flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: pageSize, EraseValue: 0xff})
+		if err != nil {
+			t.Fatalf("testflash.NewNOR() error = %v", err)
+		}
+		dev, err := blkdev.NewNOR(flash)
+		if err != nil {
+			t.Fatalf("blkdev.NewNOR() error = %v", err)
+		}
+		if err := Format(dev, FormatOptions{}); err != nil {
+			t.Fatalf("Format(page %d) error = %v", pageSize, err)
+		}
+		store, err := Mount(dev, MountOptions{})
+		if err != nil {
+			t.Fatalf("Mount(page %d) error = %v", pageSize, err)
+		}
+		id, err := store.CreateNamespace("a")
+		if err != nil {
+			t.Fatalf("CreateNamespace(page %d) error = %v", pageSize, err)
+		}
+		reopened, err := Mount(dev, MountOptions{})
+		if err != nil {
+			t.Fatalf("Mount(page %d) reopened error = %v", pageSize, err)
+		}
+		if got, ok, _ := reopened.LookupNamespace("a"); !ok || got != id {
+			t.Fatalf("LookupNamespace(page %d) = %d, %v, want %d, true", pageSize, got, ok, id)
+		}
+	}
+}
+
+func TestBlockSmallerThanUnit(t *testing.T) {
+	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 32, EraseBlockSize: 32, PageSize: 32, EraseValue: 0xff})
+	if err != nil {
+		t.Fatalf("testflash.NewNOR() error = %v", err)
+	}
+	dev, err := blkdev.NewNOR(flash)
+	if err != nil {
+		t.Fatalf("blkdev.NewNOR() error = %v", err)
+	}
+	if err := Format(dev, FormatOptions{}); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Fatalf("Format() error = %v, want %v", err, ErrUnsupportedFormat)
+	}
+	if _, err := Mount(dev, MountOptions{}); !errors.Is(err, ErrUnsupportedFormat) {
+		t.Fatalf("Mount() error = %v, want %v", err, ErrUnsupportedFormat)
+	}
+}

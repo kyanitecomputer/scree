@@ -30,7 +30,7 @@ func newMasterNode(sb superblock) masterNode {
 }
 
 func writeMaster(dev blkdev.BlockDevice, block int, m masterNode) error {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	copy(buf[masterOffsetMagic:], masterMagic)
 	binary.LittleEndian.PutUint64(buf[masterOffsetSequence:], m.Sequence)
 	binary.LittleEndian.PutUint32(buf[masterOffsetFreeStart:], m.FreeStart)
@@ -43,7 +43,7 @@ func writeMaster(dev blkdev.BlockDevice, block int, m masterNode) error {
 }
 
 func readMaster(dev blkdev.BlockDevice, block int) (masterNode, error) {
-	buf := make([]byte, dev.WriteSize())
+	buf := make([]byte, unitSize(dev.WriteSize()))
 	if err := dev.ReadAt(block, 0, buf); err != nil {
 		return masterNode{}, err
 	}
