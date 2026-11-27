@@ -58,7 +58,7 @@ func (n *NOR) ReadAt(dst []byte, addr int64) (int, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	if addr < 0 || addr+int64(len(dst)) > int64(len(n.data)) {
+	if !n.inRange(addr, len(dst)) {
 		return 0, ErrOutOfRange
 	}
 	copy(dst, n.data[addr:addr+int64(len(dst))])
@@ -76,7 +76,7 @@ func (n *NOR) WriteAt(src []byte, addr int64) (int, error) {
 		n.failWrites--
 	}
 
-	if addr < 0 || addr+int64(len(src)) > int64(len(n.data)) {
+	if !n.inRange(addr, len(src)) {
 		return 0, ErrOutOfRange
 	}
 	if addr%int64(n.geometry.PageSize) != 0 || len(src)%n.geometry.PageSize != 0 {
@@ -150,4 +150,8 @@ func (n *NOR) EraseCount(block int) (uint64, error) {
 		return 0, ErrOutOfRange
 	}
 	return n.eraseCounts[block], nil
+}
+
+func (n *NOR) inRange(addr int64, size int) bool {
+	return addr >= 0 && addr <= int64(len(n.data)) && int64(size) <= int64(len(n.data))-addr
 }

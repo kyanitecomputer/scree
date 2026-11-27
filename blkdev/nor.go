@@ -31,7 +31,7 @@ func (n *NOR) BlockSize() int {
 
 // BlockCount returns the number of logical erase blocks.
 func (n *NOR) BlockCount() int {
-	return int(n.geom.TotalSize) / n.geom.EraseBlockSize
+	return int(n.geom.TotalSize / int64(n.geom.EraseBlockSize))
 }
 
 // WriteSize returns the minimum write granularity.
@@ -93,5 +93,5 @@ func (n *NOR) Close() error {
 }
 
 func (n *NOR) addr(block int, off int) int64 {
-	return int64(block*n.geom.EraseBlockSize + off)
+	return int64(block)*int64(n.geom.EraseBlockSize) + int64(off)
 }

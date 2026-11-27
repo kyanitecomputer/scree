@@ -2,6 +2,7 @@ package testflash
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"src.kyanite.computer/scree/driver"
@@ -69,5 +70,18 @@ func TestNORRejectsWriteToProgrammedBits(t *testing.T) {
 	}
 	if _, err := nor.WriteAt(second, 0); !errors.Is(err, ErrNotErased) {
 		t.Fatalf("WriteAt(second) error = %v, want %v", err, ErrNotErased)
+	}
+}
+
+func TestNORRejectsOverflowingRange(t *testing.T) {
+	nor, err := NewNOR(testGeometry())
+	if err != nil {
+		t.Fatalf("NewNOR() error = %v", err)
+	}
+	if _, err := nor.ReadAt(make([]byte, 256), math.MaxInt64-128); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("ReadAt() error = %v, want %v", err, ErrOutOfRange)
+	}
+	if _, err := nor.WriteAt(make([]byte, 256), math.MaxInt64-128); !errors.Is(err, ErrOutOfRange) {
+		t.Fatalf("WriteAt() error = %v, want %v", err, ErrOutOfRange)
 	}
 }

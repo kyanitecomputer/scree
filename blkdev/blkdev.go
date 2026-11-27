@@ -44,7 +44,7 @@ func CheckRange(dev BlockDevice, block int, off int, n int) error {
 	if err := Validate(dev); err != nil {
 		return err
 	}
-	if block < 0 || block >= dev.BlockCount() || off < 0 || n < 0 || off+n > dev.BlockSize() {
+	if block < 0 || block >= dev.BlockCount() || off < 0 || n < 0 || off > dev.BlockSize() || n > dev.BlockSize()-off {
 		return ErrOutOfRange
 	}
 	return nil
