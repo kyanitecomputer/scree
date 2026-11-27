@@ -176,45 +176,35 @@ func (s *streamStore) LoadMsg(seq uint64, sm *server.StoreMsg) (*server.StoreMsg
 	if err != nil {
 		return nil, server.ErrStoreMsgNotFound
 	}
-	if sm == nil {
-		sm = &server.StoreMsg{}
-	}
-	sm.Set(entry.Subject, entry.Header, entry.Payload, entry.Sequence, entry.Timestamp)
-	return sm, nil
+	return setMsg(sm, entry), nil
 }
 
+// LoadNextMsg loads the first message from start on whose subject matches
+// filter, and returns its sequence too.
 func (s *streamStore) LoadNextMsg(filter string, wc bool, start uint64, sm *server.StoreMsg) (*server.StoreMsg, uint64, error) {
-	last, _ := s.store.LastSequence(s.ns)
-	for seq := start; seq <= last; seq++ {
-		entry, err := s.store.LoadEntry(s.ns, seq)
-		if err != nil || (filter != "" && entry.Subject != filter) {
-			continue
-		}
-		if sm == nil {
-			sm = &server.StoreMsg{}
-		}
-		sm.Set(entry.Subject, entry.Header, entry.Payload, entry.Sequence, entry.Timestamp)
-		return sm, 0, nil
-	}
-	return nil, 0, server.ErrStoreEOF
+	return s.loadNext(func(subject string) bool { return subjectMatches(subject, filter) }, start, sm)
 }
 
 func (s *streamStore) LoadNextMsgMulti(sl *gsl.SimpleSublist, start uint64, sm *server.StoreMsg) (*server.StoreMsg, uint64, error) {
-	return s.LoadNextMsg("", false, start, sm)
+	return s.loadNext(sl.HasInterest, start, sm)
 }
 
+func (s *streamStore) loadNext(match func(string) bool, start uint64, sm *server.StoreMsg) (*server.StoreMsg, uint64, error) {
+	for entry := range s.entries(start, math.MaxUint64) {
+		if match(entry.Subject) {
+			return setMsg(sm, entry), entry.Sequence, nil
+		}
+	}
+	return nil, s.lastSeq(), server.ErrStoreEOF
+}
+
+// LoadLastMsg loads the last message whose subject matches subject, which
+// may have wildcards.
 func (s *streamStore) LoadLastMsg(subject string, sm *server.StoreMsg) (*server.StoreMsg, error) {
-	last, _ := s.store.LastSequence(s.ns)
-	for seq := last; seq > 0; seq-- {
-		entry, err := s.store.LoadEntry(s.ns, seq)
-		if err != nil || (subject != "" && entry.Subject != subject) {
-			continue
+	for entry := range s.entriesBackward(math.MaxUint64, 0) {
+		if subjectMatches(entry.Subject, subject) {
+			return setMsg(sm, entry), nil
 		}
-		if sm == nil {
-			sm = &server.StoreMsg{}
-		}
-		sm.Set(entry.Subject, entry.Header, entry.Payload, entry.Sequence, entry.Timestamp)
-		return sm, nil
 	}
 	return nil, server.ErrStoreMsgNotFound
 }
@@ -227,23 +217,33 @@ func (s *streamStore) LoadLastSeq(subject string) (uint64, error) {
 	return sm.Sequence(), nil
 }
 
+// LoadPrevMsg loads the last message up to start whose subject matches
+// filter, and returns its sequence too.
 func (s *streamStore) LoadPrevMsg(filter string, wc bool, start uint64, sm *server.StoreMsg) (*server.StoreMsg, uint64, error) {
-	for seq := start; seq > 0; seq-- {
-		entry, err := s.store.LoadEntry(s.ns, seq)
-		if err != nil || (filter != "" && entry.Subject != filter) {
-			continue
-		}
-		if sm == nil {
-			sm = &server.StoreMsg{}
-		}
-		sm.Set(entry.Subject, entry.Header, entry.Payload, entry.Sequence, entry.Timestamp)
-		return sm, 0, nil
-	}
-	return nil, 0, server.ErrStoreEOF
+	return s.loadPrev(func(subject string) bool { return subjectMatches(subject, filter) }, start, sm)
 }
 
 func (s *streamStore) LoadPrevMsgMulti(sl *gsl.SimpleSublist, start uint64, sm *server.StoreMsg) (*server.StoreMsg, uint64, error) {
-	return s.LoadPrevMsg("", false, start, sm)
+	return s.loadPrev(sl.HasInterest, start, sm)
+}
+
+func (s *streamStore) loadPrev(match func(string) bool, start uint64, sm *server.StoreMsg) (*server.StoreMsg, uint64, error) {
+	for entry := range s.entriesBackward(start, 0) {
+		if match(entry.Subject) {
+			return setMsg(sm, entry), entry.Sequence, nil
+		}
+	}
+	first, _ := s.store.FirstSequence(s.ns)
+	return nil, first, server.ErrStoreEOF
+}
+
+// setMsg sets sm, or a new message if it is nil, to entry and returns it.
+func setMsg(sm *server.StoreMsg, entry *scree.StoredEntry) *server.StoreMsg {
+	if sm == nil {
+		sm = &server.StoreMsg{}
+	}
+	sm.Set(entry.Subject, entry.Header, entry.Payload, entry.Sequence, entry.Timestamp)
+	return sm
 }
 
 func (s *streamStore) RemoveMsg(seq uint64) (bool, error) {
@@ -376,6 +376,23 @@ func (s *streamStore) entries(start, end uint64) iter.Seq[*scree.StoredEntry] {
 		}
 		start, end = max(start, first), min(end, s.lastSeq())
 		for seq := start; seq <= end && seq != 0; seq++ {
+			entry, err := s.store.LoadEntry(s.ns, seq)
+			if err == nil && !yield(entry) {
+				return
+			}
+		}
+	}
+}
+
+// entriesBackward yields the stream's entries from start down to end.
+func (s *streamStore) entriesBackward(start, end uint64) iter.Seq[*scree.StoredEntry] {
+	return func(yield func(*scree.StoredEntry) bool) {
+		first, err := s.store.FirstSequence(s.ns)
+		if err != nil {
+			return
+		}
+		start, end = min(start, s.lastSeq()), max(end, first)
+		for seq := start; seq >= end && seq != 0; seq-- {
 			entry, err := s.store.LoadEntry(s.ns, seq)
 			if err == nil && !yield(entry) {
 				return

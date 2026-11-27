@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
+	"github.com/nats-io/nats-server/v2/server/gsl"
 
 	"src.kyanite.computer/scree"
 	"src.kyanite.computer/scree/blkdev"
@@ -235,5 +236,39 @@ func TestStreamStorePurgeEx(t *testing.T) {
 	}
 	if !slices.Equal(seqs, []uint64{5, 6}) {
 		t.Fatalf("sequences after PurgeEx = %v, want [5 6]", seqs)
+	}
+}
+
+func TestStreamStoreLoadByFilter(t *testing.T) {
+	store := newTestStreamStore(t)
+	storeTestMsgs(t, store, "a.1", "b", "a.2", "c")
+
+	sm, seq, err := store.LoadNextMsg("a.*", true, 2, nil)
+	if err != nil || seq != 3 || sm.Subject() != "a.2" {
+		t.Fatalf("LoadNextMsg(a.*, 2) = %q, %d, %v, want a.2, 3, nil", sm.Subject(), seq, err)
+	}
+	if _, seq, err := store.LoadNextMsg("a.*", true, 4, nil); !errors.Is(err, server.ErrStoreEOF) || seq != 4 {
+		t.Fatalf("LoadNextMsg(a.*, 4) = %d, %v, want 4, %v", seq, err, server.ErrStoreEOF)
+	}
+	sm, seq, err = store.LoadPrevMsg("a.*", true, 2, nil)
+	if err != nil || seq != 1 || sm.Subject() != "a.1" {
+		t.Fatalf("LoadPrevMsg(a.*, 2) = %q, %d, %v, want a.1, 1, nil", sm.Subject(), seq, err)
+	}
+	if sm, err := store.LoadLastMsg("a.>", nil); err != nil || sm.Sequence() != 3 {
+		t.Fatalf("LoadLastMsg(a.>) = %v, %v, want sequence 3", sm, err)
+	}
+
+	sl := gsl.NewSimpleSublist()
+	if err := sl.Insert("c", struct{}{}); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if err := sl.Insert("b", struct{}{}); err != nil {
+		t.Fatalf("Insert() error = %v", err)
+	}
+	if _, seq, err := store.LoadNextMsgMulti(sl, 3, nil); err != nil || seq != 4 {
+		t.Fatalf("LoadNextMsgMulti(3) = %d, %v, want 4, nil", seq, err)
+	}
+	if _, seq, err := store.LoadPrevMsgMulti(sl, 3, nil); err != nil || seq != 2 {
+		t.Fatalf("LoadPrevMsgMulti(3) = %d, %v, want 2, nil", seq, err)
 	}
 }
