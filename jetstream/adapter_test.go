@@ -1,6 +1,7 @@
 package jetstream
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -139,5 +140,37 @@ func TestStreamStoreDelete(t *testing.T) {
 	}
 	if _, ok, _ := reopened.LookupNamespace("TEST"); ok {
 		t.Fatal("namespace TEST still exists after Delete")
+	}
+}
+
+func TestStreamStoreRawAndSkip(t *testing.T) {
+	store := newTestStreamStore(t)
+	if err := store.StoreRawMsg("foo", nil, []byte("one"), 2, 1, 0, false); !errors.Is(err, server.ErrSequenceMismatch) {
+		t.Fatalf("StoreRawMsg(2) error = %v, want %v", err, server.ErrSequenceMismatch)
+	}
+	if state := store.State(); state.LastSeq != 0 {
+		t.Fatalf("StoreRawMsg(2) stored a message: %+v", state)
+	}
+	if err := store.StoreRawMsg("foo", nil, []byte("one"), 1, 1, 0, false); err != nil {
+		t.Fatalf("StoreRawMsg(1) error = %v", err)
+	}
+	if seq, err := store.SkipMsg(2); err != nil || seq != 2 {
+		t.Fatalf("SkipMsg(2) = %d, %v, want 2, nil", seq, err)
+	}
+	if _, err := store.SkipMsg(5); !errors.Is(err, server.ErrSequenceMismatch) {
+		t.Fatalf("SkipMsg(5) error = %v, want %v", err, server.ErrSequenceMismatch)
+	}
+	if err := store.SkipMsgs(3, 3); err != nil {
+		t.Fatalf("SkipMsgs(3, 3) error = %v", err)
+	}
+	if seq, err := store.SkipMsg(0); err != nil || seq != 6 {
+		t.Fatalf("SkipMsg(0) = %d, %v, want 6, nil", seq, err)
+	}
+	seq, _, err := store.StoreMsg("foo", nil, []byte("two"), 0)
+	if err != nil || seq != 7 {
+		t.Fatalf("StoreMsg() = %d, %v, want 7, nil", seq, err)
+	}
+	if state := store.State(); state.Msgs != 2 || state.FirstSeq != 1 || state.LastSeq != 7 {
+		t.Fatalf("State() = %+v, want 2 messages from 1 to 7", state)
 	}
 }

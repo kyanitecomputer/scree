@@ -102,25 +102,73 @@ func (s *streamStore) StoreMsg(subject string, hdr, msg []byte, ttl int64) (uint
 	return seq, ts, nil
 }
 
+// StoreRawMsg stores a message at seq, which has to be the next sequence; a
+// zero seq stands for it.
 func (s *streamStore) StoreRawMsg(subject string, hdr, msg []byte, seq uint64, ts int64, ttl int64, discardNewCheck bool) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	got, err := s.store.Append(s.ns, &scree.Entry{Subject: subject, Header: hdr, Payload: msg, Timestamp: ts})
+	seq, err := s.nextSeq(seq)
+	if err == nil {
+		_, err = s.store.Append(s.ns, &scree.Entry{Subject: subject, Header: hdr, Payload: msg, Timestamp: ts})
+	}
+	cb := s.updates
+	s.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	if got != seq {
-		return server.ErrSequenceMismatch
+	if cb != nil {
+		cb(1, int64(len(hdr)+len(msg)), seq, subject)
 	}
 	return nil
 }
 
-func (s *streamStore) SkipMsg(seq uint64) (uint64, error) { return seq, nil }
+// nextSeq checks that seq is the next sequence, or returns it for a zero
+// seq. s.mu must be held.
+func (s *streamStore) nextSeq(seq uint64) (uint64, error) {
+	next := s.lastSeq() + 1
+	if seq != next && seq != 0 {
+		return 0, server.ErrSequenceMismatch
+	}
+	return next, nil
+}
+
+// lastSeq returns the last sequence of the stream, or 0.
+func (s *streamStore) lastSeq() uint64 {
+	last, _ := s.store.LastSequence(s.ns)
+	return last
+}
+
+// SkipMsg uses seq, the next sequence, without storing a message; a zero
+// seq stands for it.
+func (s *streamStore) SkipMsg(seq uint64) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seq, err := s.nextSeq(seq)
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.store.SetLastSequence(s.ns, seq); err != nil {
+		return 0, err
+	}
+	return seq, nil
+}
+
 func (s *streamStore) SkipMsgNoInterest(seq uint64) (uint64, error) {
 	return s.SkipMsg(seq)
 }
-func (s *streamStore) SkipMsgs(seq uint64, num uint64) error { return nil }
-func (s *streamStore) FlushAllPending() error                { return s.store.Sync() }
+
+// SkipMsgs uses num sequences from seq, the next sequence, without storing
+// messages; a zero seq stands for it.
+func (s *streamStore) SkipMsgs(seq uint64, num uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seq, err := s.nextSeq(seq)
+	if err != nil || num == 0 {
+		return err
+	}
+	_, err = s.store.SetLastSequence(s.ns, seq+num-1)
+	return err
+}
+func (s *streamStore) FlushAllPending() error { return s.store.Sync() }
 
 func (s *streamStore) LoadMsg(seq uint64, sm *server.StoreMsg) (*server.StoreMsg, error) {
 	entry, err := s.store.LoadEntry(s.ns, seq)
