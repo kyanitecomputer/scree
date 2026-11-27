@@ -1,7 +1,9 @@
 package jetstream
 
 import (
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats-server/v2/server"
 
@@ -44,6 +46,37 @@ func TestStreamStoreStateAfterRemove(t *testing.T) {
 	state := store.State()
 	if state.Msgs != 1 || state.FirstSeq != 2 || state.LastSeq != 2 {
 		t.Fatalf("State() = %+v, want one live message at seq 2", state)
+	}
+}
+
+func TestStreamStoreConcurrentUse(t *testing.T) {
+	store := newTestStreamStore(t)
+	cs, err := store.ConsumerStore("c", time.Now(), &server.ConsumerConfig{})
+	if err != nil {
+		t.Fatalf("ConsumerStore() error = %v", err)
+	}
+	var wg sync.WaitGroup
+	for range 4 {
+		wg.Go(func() {
+			for i := range 10 {
+				if _, _, err := store.StoreMsg("foo", nil, []byte("x"), 0); err != nil {
+					t.Errorf("StoreMsg() error = %v", err)
+					return
+				}
+				cs.UpdateDelivered(uint64(i), uint64(i), 1, 0)
+				cs.State()
+			}
+		})
+		wg.Go(func() {
+			for range 10 {
+				store.RegisterStorageUpdates(func(int64, int64, uint64, string) {})
+				store.State()
+			}
+		})
+	}
+	wg.Wait()
+	if state := store.State(); state.Msgs != 40 {
+		t.Fatalf("State().Msgs = %d, want 40", state.Msgs)
 	}
 }
 

@@ -65,9 +65,13 @@ func Register(storage server.StorageType, name string, provider Provider) error 
 	})
 }
 
+// streamStore is a NATS stream in a Scree namespace. The Scree store locks
+// itself; mu serializes the changes of the stream, so that a check and the
+// change it guards are not interleaved with another change, and guards the
+// fields below it. The callbacks are called without it.
 type streamStore struct {
-	mu        sync.RWMutex
 	storage   server.StorageType
+	mu        sync.RWMutex
 	store     *scree.Store
 	ns        scree.NamespaceID
 	updates   server.StorageUpdateHandler
@@ -79,17 +83,22 @@ type streamStore struct {
 
 func (s *streamStore) StoreMsg(subject string, hdr, msg []byte, ttl int64) (uint64, int64, error) {
 	ts := time.Now().UnixNano()
+	s.mu.Lock()
 	seq, err := s.store.Append(s.ns, &scree.Entry{Subject: subject, Header: hdr, Payload: msg, Timestamp: ts})
+	cb := s.updates
+	s.mu.Unlock()
 	if err != nil {
 		return 0, 0, err
 	}
-	if s.updates != nil {
-		s.updates(1, int64(len(hdr)+len(msg)), seq, subject)
+	if cb != nil {
+		cb(1, int64(len(hdr)+len(msg)), seq, subject)
 	}
 	return seq, ts, nil
 }
 
 func (s *streamStore) StoreRawMsg(subject string, hdr, msg []byte, seq uint64, ts int64, ttl int64, discardNewCheck bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	got, err := s.store.Append(s.ns, &scree.Entry{Subject: subject, Header: hdr, Payload: msg, Timestamp: ts})
 	if err != nil {
 		return err
@@ -183,11 +192,15 @@ func (s *streamStore) LoadPrevMsgMulti(sl *gsl.SimpleSublist, start uint64, sm *
 }
 
 func (s *streamStore) RemoveMsg(seq uint64) (bool, error) {
-	if err := s.store.RemoveEntry(s.ns, seq); err != nil {
+	s.mu.Lock()
+	err := s.store.RemoveEntry(s.ns, seq)
+	cb := s.removes
+	s.mu.Unlock()
+	if err != nil {
 		return false, err
 	}
-	if s.removes != nil {
-		s.removes(seq)
+	if cb != nil {
+		cb(seq)
 	}
 	return true, nil
 }
@@ -195,15 +208,21 @@ func (s *streamStore) RemoveMsg(seq uint64) (bool, error) {
 func (s *streamStore) EraseMsg(seq uint64) (bool, error) { return s.RemoveMsg(seq) }
 
 func (s *streamStore) Purge() (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.store.Purge(s.ns)
 }
 
 func (s *streamStore) PurgeEx(subject string, seq, keep uint64) (uint64, error) { return s.Purge() }
 func (s *streamStore) Compact(seq uint64) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, err := s.store.PurgeUpTo(s.ns, seq)
 	return seq, err
 }
 func (s *streamStore) Truncate(seq uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, err := s.store.PurgeUpTo(s.ns, seq)
 	return err
 }
@@ -320,15 +339,27 @@ func (s *streamStore) ApplySourcesState(sources map[string]server.StreamSourceSt
 
 func (s *streamStore) Ready() {}
 
-func (s *streamStore) SyncDeleted(dbs server.DeleteBlocks) error                  { return nil }
-func (s *streamStore) Type() server.StorageType                                   { return s.storage }
-func (s *streamStore) RegisterStorageUpdates(cb server.StorageUpdateHandler)      { s.updates = cb }
-func (s *streamStore) RegisterStorageRemoveMsg(cb server.StorageRemoveMsgHandler) { s.removes = cb }
+func (s *streamStore) SyncDeleted(dbs server.DeleteBlocks) error { return nil }
+func (s *streamStore) Type() server.StorageType                  { return s.storage }
+func (s *streamStore) RegisterStorageUpdates(cb server.StorageUpdateHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updates = cb
+}
+func (s *streamStore) RegisterStorageRemoveMsg(cb server.StorageRemoveMsgHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.removes = cb
+}
 func (s *streamStore) RegisterProcessJetStreamMsg(cb server.ProcessJetStreamMsgHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.process = cb
 }
 func (s *streamStore) UpdateConfig(cfg *server.StreamConfig) error { return nil }
 func (s *streamStore) Delete(inline bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, err := s.store.Purge(s.ns)
 	return err
 }
@@ -372,41 +403,64 @@ func (s *streamStore) Snapshot(deadline time.Duration, includeConsumers, checkMs
 func (s *streamStore) Utilization() (uint64, uint64, error) { return 0, 0, nil }
 func (s *streamStore) ResetState()                          {}
 
+// consumerStore keeps a consumer's state in memory. mu guards cfg and state.
 type consumerStore struct {
 	stream  *streamStore
 	name    string
-	cfg     server.ConsumerConfig
 	storage server.StorageType
+	mu      sync.Mutex
+	cfg     server.ConsumerConfig
 	state   server.ConsumerState
 }
 
-func (c *consumerStore) SetStarting(sseq uint64) error { c.state.Delivered.Stream = sseq; return nil }
-func (c *consumerStore) UpdateStarting(sseq uint64)    { c.state.Delivered.Stream = sseq }
+func (c *consumerStore) SetStarting(sseq uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state.Delivered.Stream = sseq
+	return nil
+}
+func (c *consumerStore) UpdateStarting(sseq uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state.Delivered.Stream = sseq
+}
 func (c *consumerStore) Reset(sseq uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.state = server.ConsumerState{}
 	c.state.Delivered.Stream = sseq
 	return nil
 }
 func (c *consumerStore) HasState() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.state.Delivered.Stream != 0 || c.state.AckFloor.Stream != 0
 }
 func (c *consumerStore) UpdateDelivered(dseq, sseq, dc uint64, ts int64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.state.Delivered.Consumer = dseq
 	c.state.Delivered.Stream = sseq
 	return nil
 }
 func (c *consumerStore) UpdateAcks(dseq, sseq uint64, explicit bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.state.AckFloor.Consumer = dseq
 	c.state.AckFloor.Stream = sseq
 	return nil
 }
 func (c *consumerStore) RemoveRedeliveredBelow(seq uint64) {}
 func (c *consumerStore) GetConfig() *server.ConsumerConfig {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	cfg := c.cfg
 	cfg.Name = c.name
 	return &cfg
 }
 func (c *consumerStore) UpdateConfig(cfg *server.ConsumerConfig) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if cfg != nil {
 		c.cfg = *cfg
 	}
@@ -414,18 +468,30 @@ func (c *consumerStore) UpdateConfig(cfg *server.ConsumerConfig) error {
 }
 func (c *consumerStore) Update(state *server.ConsumerState) error { return c.ForceUpdate(state) }
 func (c *consumerStore) ForceUpdate(state *server.ConsumerState) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if state != nil {
 		c.state = *state
 	}
 	return nil
 }
-func (c *consumerStore) State() (*server.ConsumerState, error)       { st := c.state; return &st, nil }
+func (c *consumerStore) State() (*server.ConsumerState, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	st := c.state
+	return &st, nil
+}
 func (c *consumerStore) BorrowState() (*server.ConsumerState, error) { return c.State() }
 func (c *consumerStore) EncodedState() ([]byte, error)               { return nil, nil }
 func (c *consumerStore) Type() server.StorageType                    { return c.storage }
 func (c *consumerStore) Stop() error                                 { return c.stream.RemoveConsumer(c) }
-func (c *consumerStore) Delete() error                               { c.state = server.ConsumerState{}; return c.Stop() }
-func (c *consumerStore) StreamDelete() error                         { return c.Delete() }
+func (c *consumerStore) Delete() error {
+	c.mu.Lock()
+	c.state = server.ConsumerState{}
+	c.mu.Unlock()
+	return c.Stop()
+}
+func (c *consumerStore) StreamDelete() error { return c.Delete() }
 
 type emptyReader struct{}
 
