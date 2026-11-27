@@ -14,6 +14,8 @@ type VerifyOptions struct {
 // write that power loss cut short, and for programmed units after the end of
 // the journal.
 func (s *Store) Verify(opts VerifyOptions) error {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	sb, err := mountSuperblock(s.dev)
 	if err != nil {
 		return err

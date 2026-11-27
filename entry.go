@@ -49,6 +49,8 @@ type entryRecord struct {
 
 // Append writes an entry to a namespace and returns its sequence number.
 func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -89,6 +91,8 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 
 // LoadEntry reads an entry by namespace and sequence number.
 func (s *Store) LoadEntry(ns NamespaceID, seq uint64) (*StoredEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	entry, ok := s.logs[ns].get(seq)
 	if !ok {
 		return nil, ErrNotFound
@@ -101,6 +105,8 @@ func (s *Store) LoadEntry(ns NamespaceID, seq uint64) (*StoredEntry, error) {
 
 // LoadEntryBySubject reads the subjectSeq-th entry for a subject.
 func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq uint64) (*StoredEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if subjectSeq == 0 {
 		return nil, ErrNotFound
 	}
@@ -122,6 +128,8 @@ func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq ui
 
 // FirstSequence returns the lowest live sequence in a namespace.
 func (s *Store) FirstSequence(ns NamespaceID) (uint64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if first := s.logs[ns].firstSeq(); first != 0 {
 		return first, nil
 	}
@@ -130,6 +138,8 @@ func (s *Store) FirstSequence(ns NamespaceID) (uint64, error) {
 
 // LastSequence returns the highest assigned sequence in a namespace.
 func (s *Store) LastSequence(ns NamespaceID) (uint64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	last := s.logs[ns].lastSeq()
 	if last == 0 {
 		return 0, ErrNotFound
@@ -139,6 +149,8 @@ func (s *Store) LastSequence(ns NamespaceID) (uint64, error) {
 
 // RemoveEntry removes a single entry from a namespace.
 func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -158,6 +170,8 @@ func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 // Purge removes all entries from a namespace and returns how many it
 // removed. The next entry gets the sequence after the last one assigned.
 func (s *Store) Purge(ns NamespaceID) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -178,6 +192,8 @@ func (s *Store) Purge(ns NamespaceID) (uint64, error) {
 // PurgeUpTo removes the entries with sequence numbers less than or equal to
 // seq, in one journal record, and returns how many it removed.
 func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -200,6 +216,8 @@ func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 // next entry gets seq+1. Entries after seq are removed, and their sequences
 // are assigned again; it returns how many it removed.
 func (s *Store) SetLastSequence(ns NamespaceID, seq uint64) (uint64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -220,6 +238,8 @@ func (s *Store) SetLastSequence(ns NamespaceID, seq uint64) (uint64, error) {
 
 // Sync commits pending writes to the underlying block device.
 func (s *Store) Sync() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.dev.Sync()
 }
 

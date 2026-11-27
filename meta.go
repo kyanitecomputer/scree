@@ -13,6 +13,8 @@ const (
 
 // PutMeta stores metadata for a namespace.
 func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -35,6 +37,8 @@ func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 
 // GetMeta returns metadata for a namespace.
 func (s *Store) GetMeta(ns NamespaceID, key string) ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if s.meta[ns] == nil {
 		return nil, ErrNotFound
 	}
@@ -48,6 +52,8 @@ func (s *Store) GetMeta(ns NamespaceID, key string) ([]byte, error) {
 // MetaKeys returns the metadata keys stored in a namespace, sorted. It returns
 // an empty slice (not an error) for an unknown or empty namespace.
 func (s *Store) MetaKeys(ns NamespaceID) ([]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	m := s.meta[ns]
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -59,6 +65,8 @@ func (s *Store) MetaKeys(ns NamespaceID) ([]string, error) {
 
 // DeleteMeta removes metadata from a namespace.
 func (s *Store) DeleteMeta(ns NamespaceID, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return ErrReadOnly
 	}

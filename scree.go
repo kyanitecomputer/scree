@@ -1,9 +1,14 @@
 package scree
 
-import "src.kyanite.computer/scree/blkdev"
+import (
+	"sync"
 
-// Store is a mounted Scree volume.
+	"src.kyanite.computer/scree/blkdev"
+)
+
+// Store is a mounted Scree volume. Its methods may be called concurrently.
 type Store struct {
+	mu         sync.RWMutex
 	dev        blkdev.BlockDevice
 	super      superblock
 	master     masterNode
@@ -95,6 +100,8 @@ func newStore(dev blkdev.BlockDevice, sb superblock, master masterNode) *Store {
 
 // Stats returns storage statistics.
 func (s *Store) Stats() StoreStats {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return StoreStats{TotalBlocks: int(s.super.BlockCount), FreeBlocks: int(s.master.FreeBlocks)}
 }
 

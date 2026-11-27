@@ -19,6 +19,8 @@ type NamespaceEntry struct {
 
 // CreateNamespace creates a named namespace.
 func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -42,12 +44,16 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 
 // LookupNamespace returns the namespace ID for name.
 func (s *Store) LookupNamespace(name string) (NamespaceID, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	id, ok := s.nsByName[name]
 	return id, ok, nil
 }
 
 // ListNamespaces returns all namespaces ordered by ID.
 func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	entries := make([]NamespaceEntry, 0, len(s.namespaces))
 	for id, name := range s.namespaces {
 		entries = append(entries, NamespaceEntry{ID: id, Name: name})
@@ -58,6 +64,8 @@ func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
 
 // DeleteNamespace deletes a namespace and its in-memory entries.
 func (s *Store) DeleteNamespace(id NamespaceID) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.readOnly {
 		return ErrReadOnly
 	}
