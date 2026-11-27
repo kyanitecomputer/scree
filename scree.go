@@ -19,6 +19,7 @@ type Store struct {
 	logs       map[NamespaceID]*entryLog
 	meta       map[NamespaceID]map[string][]byte
 	readOnly   bool
+	closed     bool
 }
 
 // Format initializes a Scree volume on a block device.
@@ -111,7 +112,17 @@ type StoreStats struct {
 	FreeBlocks  int
 }
 
-// Close releases resources associated with the store.
+// Close syncs the device and closes the store, whose methods then return
+// ErrClosed. The device stays open; it belongs to the caller.
 func (s *Store) Close() error {
-	return nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
+	s.closed = true
+	if s.readOnly {
+		return nil
+	}
+	return s.dev.Sync()
 }

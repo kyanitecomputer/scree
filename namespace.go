@@ -21,6 +21,9 @@ type NamespaceEntry struct {
 func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -46,6 +49,9 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 func (s *Store) LookupNamespace(name string) (NamespaceID, bool, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return 0, false, ErrClosed
+	}
 	id, ok := s.nsByName[name]
 	return id, ok, nil
 }
@@ -54,6 +60,9 @@ func (s *Store) LookupNamespace(name string) (NamespaceID, bool, error) {
 func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
 	entries := make([]NamespaceEntry, 0, len(s.namespaces))
 	for id, name := range s.namespaces {
 		entries = append(entries, NamespaceEntry{ID: id, Name: name})
@@ -66,6 +75,9 @@ func (s *Store) ListNamespaces() ([]NamespaceEntry, error) {
 func (s *Store) DeleteNamespace(id NamespaceID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
 	if s.readOnly {
 		return ErrReadOnly
 	}

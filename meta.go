@@ -15,6 +15,9 @@ const (
 func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -39,6 +42,9 @@ func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 func (s *Store) GetMeta(ns NamespaceID, key string) ([]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
 	if s.meta[ns] == nil {
 		return nil, ErrNotFound
 	}
@@ -54,6 +60,9 @@ func (s *Store) GetMeta(ns NamespaceID, key string) ([]byte, error) {
 func (s *Store) MetaKeys(ns NamespaceID) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
 	m := s.meta[ns]
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -67,6 +76,9 @@ func (s *Store) MetaKeys(ns NamespaceID) ([]string, error) {
 func (s *Store) DeleteMeta(ns NamespaceID, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
 	if s.readOnly {
 		return ErrReadOnly
 	}

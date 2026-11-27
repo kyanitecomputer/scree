@@ -219,3 +219,42 @@ func createNamespace(t *testing.T, store *Store, name string) NamespaceID {
 	}
 	return ns
 }
+
+// syncCountingDevice counts the syncs of its device.
+type syncCountingDevice struct {
+	blkdev.BlockDevice
+	syncs *int
+}
+
+func (d syncCountingDevice) Sync() error {
+	*d.syncs++
+	return d.BlockDevice.Sync()
+}
+
+func TestClose(t *testing.T) {
+	var syncs int
+	dev := syncCountingDevice{newFormattedDevice(t, FormatOptions{}), &syncs}
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	ns := createNamespace(t, store, "test")
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if syncs != 1 {
+		t.Fatalf("Close() synced %d times, want 1", syncs)
+	}
+	if err := store.Close(); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Close() again error = %v, want %v", err, ErrClosed)
+	}
+	if _, err := store.Append(ns, &Entry{}); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Append() after Close error = %v, want %v", err, ErrClosed)
+	}
+	if _, _, err := store.LookupNamespace("test"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("LookupNamespace() after Close error = %v, want %v", err, ErrClosed)
+	}
+	if _, err := Mount(dev, MountOptions{}); err != nil {
+		t.Fatalf("Mount() after Close error = %v", err)
+	}
+}

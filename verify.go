@@ -16,6 +16,9 @@ type VerifyOptions struct {
 func (s *Store) Verify(opts VerifyOptions) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return ErrClosed
+	}
 	sb, err := mountSuperblock(s.dev)
 	if err != nil {
 		return err

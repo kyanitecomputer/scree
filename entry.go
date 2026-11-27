@@ -51,6 +51,9 @@ type entryRecord struct {
 func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -93,6 +96,9 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 func (s *Store) LoadEntry(ns NamespaceID, seq uint64) (*StoredEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
 	entry, ok := s.logs[ns].get(seq)
 	if !ok {
 		return nil, ErrNotFound
@@ -107,6 +113,9 @@ func (s *Store) LoadEntry(ns NamespaceID, seq uint64) (*StoredEntry, error) {
 func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq uint64) (*StoredEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return nil, ErrClosed
+	}
 	if subjectSeq == 0 {
 		return nil, ErrNotFound
 	}
@@ -130,6 +139,9 @@ func (s *Store) LoadEntryBySubject(ns NamespaceID, subject string, subjectSeq ui
 func (s *Store) FirstSequence(ns NamespaceID) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	if first := s.logs[ns].firstSeq(); first != 0 {
 		return first, nil
 	}
@@ -140,6 +152,9 @@ func (s *Store) FirstSequence(ns NamespaceID) (uint64, error) {
 func (s *Store) LastSequence(ns NamespaceID) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	last := s.logs[ns].lastSeq()
 	if last == 0 {
 		return 0, ErrNotFound
@@ -151,6 +166,9 @@ func (s *Store) LastSequence(ns NamespaceID) (uint64, error) {
 func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -172,6 +190,9 @@ func (s *Store) RemoveEntry(ns NamespaceID, seq uint64) error {
 func (s *Store) Purge(ns NamespaceID) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -194,6 +215,9 @@ func (s *Store) Purge(ns NamespaceID) (uint64, error) {
 func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -218,6 +242,9 @@ func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 func (s *Store) SetLastSequence(ns NamespaceID, seq uint64) (uint64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return 0, ErrClosed
+	}
 	if s.readOnly {
 		return 0, ErrReadOnly
 	}
@@ -240,6 +267,9 @@ func (s *Store) SetLastSequence(ns NamespaceID, seq uint64) (uint64, error) {
 func (s *Store) Sync() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.closed {
+		return ErrClosed
+	}
 	return s.dev.Sync()
 }
 
