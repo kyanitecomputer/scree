@@ -2,6 +2,7 @@ package scree
 
 import (
 	"errors"
+	"math"
 	"testing"
 
 	"src.kyanite.computer/scree/blkdev"
@@ -151,5 +152,33 @@ func TestBlockSmallerThanUnit(t *testing.T) {
 	}
 	if _, err := Mount(dev, MountOptions{}); !errors.Is(err, ErrUnsupportedFormat) {
 		t.Fatalf("Mount() error = %v, want %v", err, ErrUnsupportedFormat)
+	}
+}
+
+func TestFormatRejectsJournalLargerThanDevice(t *testing.T) {
+	for _, blocks := range []int{-1, 13, math.MaxInt} {
+		if err := Format(newDevice(t), FormatOptions{JournalBlocks: blocks}); !errors.Is(err, ErrUnsupportedFormat) {
+			t.Fatalf("Format(JournalBlocks %d) error = %v, want %v", blocks, err, ErrUnsupportedFormat)
+		}
+	}
+	if err := Format(newDevice(t), FormatOptions{JournalBlocks: 12}); err != nil {
+		t.Fatalf("Format(JournalBlocks 12) error = %v", err)
+	}
+}
+
+func TestMountRejectsJournalOutsideDevice(t *testing.T) {
+	dev := newFormattedDevice(t, FormatOptions{})
+	sb, err := readSuperblock(dev, 0)
+	if err != nil {
+		t.Fatalf("readSuperblock() error = %v", err)
+	}
+	sb.JournalBlocks = math.MaxUint32
+	for block := range 2 {
+		if err := writeSuperblock(dev, block, sb); err != nil {
+			t.Fatalf("writeSuperblock(%d) error = %v", block, err)
+		}
+	}
+	if _, err := Mount(dev, MountOptions{}); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("Mount() error = %v, want %v", err, ErrCorrupt)
 	}
 }

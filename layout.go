@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
+	"math"
 
 	"src.kyanite.computer/scree/blkdev"
 )
@@ -13,6 +14,10 @@ const (
 	superVersion      = uint32(1)
 	minBlockCount     = 8
 	defaultJournalLEB = 4
+
+	// journalStart is the first journal block, after the two superblocks
+	// and the two master nodes.
+	journalStart = 4
 
 	superOffsetMagic         = 0
 	superOffsetVersion       = 8
@@ -55,14 +60,14 @@ func newSuperblock(dev blkdev.BlockDevice, opts FormatOptions) (superblock, erro
 	if err := checkUnitSize(dev); err != nil {
 		return superblock{}, err
 	}
-	if dev.BlockCount() < minBlockCount {
+	if dev.BlockCount() < minBlockCount || uint64(dev.BlockCount()) > math.MaxUint32 || uint64(dev.BlockSize()) > math.MaxUint32 {
 		return superblock{}, ErrUnsupportedFormat
 	}
 	journalBlocks := opts.JournalBlocks
 	if journalBlocks == 0 {
 		journalBlocks = defaultJournalLEB
 	}
-	if journalBlocks < 1 || 4+journalBlocks > dev.BlockCount() {
+	if journalBlocks < 1 || journalBlocks > dev.BlockCount()-journalStart {
 		return superblock{}, ErrUnsupportedFormat
 	}
 	var flags uint32
@@ -73,7 +78,7 @@ func newSuperblock(dev blkdev.BlockDevice, opts FormatOptions) (superblock, erro
 		BlockSize:     uint32(dev.BlockSize()),
 		BlockCount:    uint32(dev.BlockCount()),
 		WriteSize:     uint32(dev.WriteSize()),
-		JournalStart:  4,
+		JournalStart:  journalStart,
 		JournalBlocks: uint32(journalBlocks),
 		Flags:         flags,
 	}, nil
@@ -119,8 +124,11 @@ func readSuperblock(dev blkdev.BlockDevice, block int) (superblock, error) {
 		JournalBlocks: binary.LittleEndian.Uint32(buf[superOffsetJournalBlocks:]),
 		Flags:         binary.LittleEndian.Uint32(buf[superOffsetFlags:]),
 	}
-	if int(sb.BlockSize) != dev.BlockSize() || int(sb.BlockCount) != dev.BlockCount() || int(sb.WriteSize) != dev.WriteSize() {
+	if uint64(sb.BlockSize) != uint64(dev.BlockSize()) || uint64(sb.BlockCount) != uint64(dev.BlockCount()) || uint64(sb.WriteSize) != uint64(dev.WriteSize()) {
 		return superblock{}, ErrUnsupportedFormat
+	}
+	if sb.JournalStart < journalStart || sb.JournalBlocks < 1 || uint64(sb.JournalStart)+uint64(sb.JournalBlocks) > uint64(sb.BlockCount) {
+		return superblock{}, ErrCorrupt
 	}
 	return sb, nil
 }

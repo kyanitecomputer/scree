@@ -108,7 +108,7 @@ func journalCRC(buf []byte, length int) uint32 {
 }
 
 func (j *journal) capacityUnits() int {
-	return j.blocks * j.dev.BlockSize() / j.writeUnit
+	return j.blocks * (j.dev.BlockSize() / j.writeUnit)
 }
 
 func (j *journal) location(unit int) (block int, off int) {

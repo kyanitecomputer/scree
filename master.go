@@ -86,7 +86,7 @@ func validateMaster(sb superblock, m masterNode) error {
 	if m.FreeStart != sb.JournalStart+sb.JournalBlocks {
 		return ErrCorrupt
 	}
-	if m.FreeStart+m.FreeBlocks != sb.BlockCount {
+	if uint64(m.FreeStart)+uint64(m.FreeBlocks) != uint64(sb.BlockCount) {
 		return ErrCorrupt
 	}
 	return nil
