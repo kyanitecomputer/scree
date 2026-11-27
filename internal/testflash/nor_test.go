@@ -85,3 +85,35 @@ func TestNORRejectsOverflowingRange(t *testing.T) {
 		t.Fatalf("WriteAt() error = %v, want %v", err, ErrOutOfRange)
 	}
 }
+
+func TestNORTearAfterWrites(t *testing.T) {
+	nor, err := NewNOR(testGeometry())
+	if err != nil {
+		t.Fatalf("NewNOR() error = %v", err)
+	}
+	nor.TearAfterWrites(1, 16)
+	src := make([]byte, 256)
+	if _, err := nor.WriteAt(src, 0); err != nil {
+		t.Fatalf("WriteAt(first) error = %v", err)
+	}
+	if _, err := nor.WriteAt(src, 256); !errors.Is(err, ErrInjected) {
+		t.Fatalf("WriteAt(torn) error = %v, want %v", err, ErrInjected)
+	}
+	got := make([]byte, 256)
+	if _, err := nor.ReadAt(got, 256); err != nil {
+		t.Fatalf("ReadAt() error = %v", err)
+	}
+	for i, b := range got {
+		want := byte(0xff)
+		if i < 16 {
+			want = 0
+		}
+		if b != want {
+			t.Fatalf("ReadAt()[%d] = %#x, want %#x", i, b, want)
+		}
+	}
+	nor.ClearFailures()
+	if _, err := nor.WriteAt(src, 512); err != nil {
+		t.Fatalf("WriteAt(after clear) error = %v", err)
+	}
+}

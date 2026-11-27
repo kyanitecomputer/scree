@@ -29,6 +29,7 @@ type NOR struct {
 	data        []byte
 	eraseCounts []uint64
 	failWrites  int
+	tearKeep    int
 }
 
 // NewNOR returns an erased in-memory NOR flash simulator.
@@ -69,11 +70,8 @@ func (n *NOR) ReadAt(dst []byte, addr int64) (int, error) {
 func (n *NOR) WriteAt(src []byte, addr int64) (int, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.failWrites == 0 {
+	if n.failWrites == 0 && n.tearKeep == 0 {
 		return 0, ErrInjected
-	}
-	if n.failWrites > 0 {
-		n.failWrites--
 	}
 
 	if !n.inRange(addr, len(src)) {
@@ -81,6 +79,12 @@ func (n *NOR) WriteAt(src []byte, addr int64) (int, error) {
 	}
 	if addr%int64(n.geometry.PageSize) != 0 || len(src)%n.geometry.PageSize != 0 {
 		return 0, ErrUnaligned
+	}
+	torn := n.failWrites == 0
+	if torn {
+		src = src[:min(n.tearKeep, len(src))]
+	} else if n.failWrites > 0 {
+		n.failWrites--
 	}
 	start := int(addr)
 	for i, b := range src {
@@ -92,6 +96,9 @@ func (n *NOR) WriteAt(src []byte, addr int64) (int, error) {
 	for i, b := range src {
 		n.data[start+i] &= b
 	}
+	if torn {
+		return 0, ErrInjected
+	}
 	return len(src), nil
 }
 
@@ -102,11 +109,22 @@ func (n *NOR) FailAfterWrites(allowed int) {
 	n.failWrites = allowed
 }
 
+// TearAfterWrites injects a failure after allowed successful writes, like
+// FailAfterWrites, but the failing write programs its first keep bytes, as
+// when power is lost while programming.
+func (n *NOR) TearAfterWrites(allowed int, keep int) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.failWrites = allowed
+	n.tearKeep = keep
+}
+
 // ClearFailures disables injected failures.
 func (n *NOR) ClearFailures() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	n.failWrites = -1
+	n.tearKeep = 0
 }
 
 // CorruptByte clears bits at addr without enforcing alignment.
