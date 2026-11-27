@@ -38,7 +38,8 @@ func TestVerifyData(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
-	if _, err := store.Append(1, &Entry{Subject: "a", Payload: []byte("b")}); err != nil {
+	ns := createNamespace(t, store, "test")
+	if _, err := store.Append(ns, &Entry{Subject: "a", Payload: []byte("b")}); err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
 	if err := store.Verify(VerifyOptions{CheckData: true}); err != nil {
@@ -68,7 +69,8 @@ func TestVerifyDetectsJournalCorruption(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
-	if _, err := store.Append(1, &Entry{Subject: "a", Payload: []byte("b")}); err != nil {
+	ns := createNamespace(t, store, "test")
+	if _, err := store.Append(ns, &Entry{Subject: "a", Payload: []byte("b")}); err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
 	if err := store.Verify(VerifyOptions{}); err != nil {

@@ -53,8 +53,8 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 	if entry == nil {
 		return 0, ErrInvalidArgument
 	}
-	if ns == 0 {
-		return 0, ErrNotFound
+	if err := s.checkNamespace(ns); err != nil {
+		return 0, err
 	}
 	seq := s.lastSeq[ns] + 1
 	ts := entry.Timestamp
@@ -161,6 +161,9 @@ func (s *Store) Purge(ns NamespaceID) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
+	if err := s.checkNamespace(ns); err != nil {
+		return err
+	}
 	data := make([]byte, 8)
 	binary.LittleEndian.PutUint64(data, uint64(ns))
 	if err := s.journal.append(journalEntry{Type: journalTypeNamespacePurge, Data: data}); err != nil {
@@ -175,6 +178,9 @@ func (s *Store) Purge(ns NamespaceID) error {
 func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) error {
 	if s.readOnly {
 		return ErrReadOnly
+	}
+	if err := s.checkNamespace(ns); err != nil {
+		return err
 	}
 	for cur := uint64(1); cur <= seq; cur++ {
 		if _, ok := s.entries[ns][cur]; ok {

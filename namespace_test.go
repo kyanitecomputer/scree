@@ -1,6 +1,9 @@
 package scree
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestNamespaceCRUD(t *testing.T) {
 	dev := newFormattedDevice(t, FormatOptions{})
@@ -61,5 +64,48 @@ func TestMetaRoundTrip(t *testing.T) {
 	}
 	if _, err := reopened.GetMeta(id, "consumer"); err != ErrNotFound {
 		t.Fatalf("GetMeta() after delete error = %v, want %v", err, ErrNotFound)
+	}
+}
+
+func TestWritesNeedNamespace(t *testing.T) {
+	dev := newFormattedDevice(t, FormatOptions{})
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	const ns = NamespaceID(7)
+	if _, err := store.Append(ns, &Entry{Subject: "a"}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Append() error = %v, want %v", err, ErrNotFound)
+	}
+	if err := store.PutMeta(ns, "k", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("PutMeta() error = %v, want %v", err, ErrNotFound)
+	}
+	if err := store.DeleteMeta(ns, "k"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DeleteMeta() error = %v, want %v", err, ErrNotFound)
+	}
+	if err := store.Purge(ns); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Purge() error = %v, want %v", err, ErrNotFound)
+	}
+	if err := store.PurgeUpTo(ns, 1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("PurgeUpTo() error = %v, want %v", err, ErrNotFound)
+	}
+}
+
+func TestCreateNamespaceFailureKeepsID(t *testing.T) {
+	flash, dev := newFailureDevice(t)
+	if err := Format(dev, FormatOptions{}); err != nil {
+		t.Fatalf("Format() error = %v", err)
+	}
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	flash.FailAfterWrites(0)
+	if _, err := store.CreateNamespace("lost"); err == nil {
+		t.Fatal("CreateNamespace() with failing flash succeeded")
+	}
+	flash.ClearFailures()
+	if id := createNamespace(t, store, "a"); id != 1 {
+		t.Fatalf("CreateNamespace() = %d, want 1", id)
 	}
 }

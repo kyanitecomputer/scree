@@ -29,7 +29,6 @@ func (s *Store) CreateNamespace(name string) (NamespaceID, error) {
 		return id, nil
 	}
 	id := s.nextNS
-	s.nextNS++
 	data, err := encodeNamespaceRecord(id, name)
 	if err != nil {
 		return 0, err
@@ -71,6 +70,14 @@ func (s *Store) DeleteNamespace(id NamespaceID) error {
 		return err
 	}
 	s.applyNamespaceDelete(id)
+	return nil
+}
+
+// checkNamespace returns ErrNotFound if ns does not exist.
+func (s *Store) checkNamespace(ns NamespaceID) error {
+	if _, ok := s.namespaces[ns]; !ok {
+		return ErrNotFound
+	}
 	return nil
 }
 

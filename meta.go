@@ -19,6 +19,9 @@ func (s *Store) PutMeta(ns NamespaceID, key string, data []byte) error {
 	if key == "" {
 		return ErrInvalidArgument
 	}
+	if err := s.checkNamespace(ns); err != nil {
+		return err
+	}
 	record, err := encodeMetaRecord(ns, key, data)
 	if err != nil {
 		return err
@@ -61,6 +64,9 @@ func (s *Store) DeleteMeta(ns NamespaceID, key string) error {
 	}
 	if key == "" {
 		return ErrInvalidArgument
+	}
+	if err := s.checkNamespace(ns); err != nil {
+		return err
 	}
 	record, err := encodeMetaRecord(ns, key, nil)
 	if err != nil {

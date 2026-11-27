@@ -11,7 +11,8 @@ func TestAppendSyncRemountLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() error = %v", err)
 	}
-	seq, err := store.Append(1, &Entry{Subject: "foo", Header: []byte("h"), Payload: []byte("hello"), Timestamp: 42})
+	ns := createNamespace(t, store, "test")
+	seq, err := store.Append(ns, &Entry{Subject: "foo", Header: []byte("h"), Payload: []byte("hello"), Timestamp: 42})
 	if err != nil {
 		t.Fatalf("Append() error = %v", err)
 	}
@@ -26,7 +27,7 @@ func TestAppendSyncRemountLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Mount() reopened error = %v", err)
 	}
-	entry, err := reopened.LoadEntry(1, seq)
+	entry, err := reopened.LoadEntry(ns, seq)
 	if err != nil {
 		t.Fatalf("LoadEntry() error = %v", err)
 	}

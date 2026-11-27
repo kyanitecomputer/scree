@@ -210,3 +210,12 @@ func TestMountReportsReadErrors(t *testing.T) {
 		t.Fatalf("Mount() with readable backups error = %v", err)
 	}
 }
+
+func createNamespace(t *testing.T, store *Store, name string) NamespaceID {
+	t.Helper()
+	ns, err := store.CreateNamespace(name)
+	if err != nil {
+		t.Fatalf("CreateNamespace(%q) error = %v", name, err)
+	}
+	return ns
+}
