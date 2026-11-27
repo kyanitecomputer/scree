@@ -86,15 +86,18 @@ func (n *NOR) WriteAt(src []byte, addr int64) (int, error) {
 	} else if n.failWrites > 0 {
 		n.failWrites--
 	}
+	// Programming moves bits away from the erase value; a bit already
+	// programmed cannot return to it.
 	start := int(addr)
+	erased := n.geometry.EraseValue
 	for i, b := range src {
 		old := n.data[start+i]
-		if old&b != b {
+		if (old^erased)&^(b^erased) != 0 {
 			return 0, ErrNotErased
 		}
 	}
 	for i, b := range src {
-		n.data[start+i] &= b
+		n.data[start+i] = erased ^ (n.data[start+i] ^ erased | b ^ erased)
 	}
 	if torn {
 		return 0, ErrInjected

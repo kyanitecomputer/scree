@@ -50,7 +50,7 @@ func (j *journal) append(entry journalEntry) error {
 		return ErrNoSpace
 	}
 	buf := make([]byte, j.writeUnit)
-	copyErased(buf)
+	fillErased(buf, j.dev.EraseValue())
 	binary.LittleEndian.PutUint16(buf[journalOffsetMagic:], journalMagic)
 	binary.LittleEndian.PutUint16(buf[journalOffsetType:], entry.Type)
 	binary.LittleEndian.PutUint32(buf[journalOffsetLength:], uint32(len(entry.Data)))
@@ -76,7 +76,7 @@ func (j *journal) replay() (entries []journalEntry, bad int, err error) {
 		if err := j.dev.ReadAt(block, off, buf); err != nil {
 			return nil, 0, err
 		}
-		if isErased(buf) {
+		if isErased(buf, j.dev.EraseValue()) {
 			break
 		}
 		entry, ok := j.decodeUnit(buf)
@@ -99,7 +99,7 @@ func (j *journal) checkErased() error {
 		if err := j.dev.ReadAt(block, off, buf); err != nil {
 			return err
 		}
-		if !isErased(buf) {
+		if !isErased(buf, j.dev.EraseValue()) {
 			return fmt.Errorf("%w: journal unit %d is programmed after the end of the journal", ErrCorrupt, unit)
 		}
 	}
@@ -140,15 +140,15 @@ func (j *journal) location(unit int) (block int, off int) {
 	return j.start + unit/unitsPerBlock, (unit % unitsPerBlock) * j.writeUnit
 }
 
-func copyErased(buf []byte) {
+func fillErased(buf []byte, erased byte) {
 	for i := range buf {
-		buf[i] = 0xff
+		buf[i] = erased
 	}
 }
 
-func isErased(buf []byte) bool {
+func isErased(buf []byte, erased byte) bool {
 	for _, b := range buf {
-		if b != 0xff {
+		if b != erased {
 			return false
 		}
 	}

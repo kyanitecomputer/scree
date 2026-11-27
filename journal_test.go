@@ -1,6 +1,12 @@
 package scree
 
-import "testing"
+import (
+	"testing"
+
+	"src.kyanite.computer/scree/blkdev"
+	"src.kyanite.computer/scree/driver"
+	"src.kyanite.computer/scree/internal/testflash"
+)
 
 func TestJournalAppendReplay(t *testing.T) {
 	dev := newFormattedDevice(t, FormatOptions{JournalBlocks: 1})
@@ -41,7 +47,7 @@ func TestJournalSkipsCorruptEntry(t *testing.T) {
 	}
 	block, off := store.journal.location(1)
 	torn := make([]byte, dev.WriteSize())
-	copyErased(torn)
+	fillErased(torn, dev.EraseValue())
 	torn[0] = 0
 	if err := dev.WriteAt(block, off, torn); err != nil {
 		t.Fatalf("WriteAt(torn) error = %v", err)
@@ -60,5 +66,36 @@ func TestJournalSkipsCorruptEntry(t *testing.T) {
 	}
 	if reopened.nextUnit != 3 {
 		t.Fatalf("replay() nextUnit = %d, want 3", reopened.nextUnit)
+	}
+}
+
+func TestJournalUsesEraseValue(t *testing.T) {
+	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0x00})
+	if err != nil {
+		t.Fatalf("testflash.NewNOR() error = %v", err)
+	}
+	dev, err := blkdev.NewNOR(flash)
+	if err != nil {
+		t.Fatalf("blkdev.NewNOR() error = %v", err)
+	}
+	if err := Format(dev, FormatOptions{}); err != nil {
+		t.Fatalf("Format() error = %v", err)
+	}
+	store, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() error = %v", err)
+	}
+	if _, err := store.CreateNamespace("a"); err != nil {
+		t.Fatalf("CreateNamespace() error = %v", err)
+	}
+	reopened, err := Mount(dev, MountOptions{})
+	if err != nil {
+		t.Fatalf("Mount() reopened error = %v", err)
+	}
+	if _, ok, _ := reopened.LookupNamespace("a"); !ok {
+		t.Fatal("LookupNamespace() found nothing after remount")
+	}
+	if err := reopened.Verify(VerifyOptions{CheckData: true}); err != nil {
+		t.Fatalf("Verify() error = %v", err)
 	}
 }

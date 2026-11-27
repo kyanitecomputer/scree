@@ -39,6 +39,11 @@ func (n *NOR) WriteSize() int {
 	return n.geom.PageSize
 }
 
+// EraseValue returns the value of every byte of an erased block.
+func (n *NOR) EraseValue() byte {
+	return n.geom.EraseValue
+}
+
 // ReadAt reads from a logical block offset.
 func (n *NOR) ReadAt(block int, off int, dst []byte) error {
 	if err := CheckRange(n, block, off, len(dst)); err != nil {

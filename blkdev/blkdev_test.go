@@ -15,6 +15,7 @@ type testDevice struct {
 func (d testDevice) BlockSize() int                 { return d.blockSize }
 func (d testDevice) BlockCount() int                { return d.blockCount }
 func (d testDevice) WriteSize() int                 { return d.writeSize }
+func (d testDevice) EraseValue() byte               { return 0xff }
 func (d testDevice) ReadAt(int, int, []byte) error  { return nil }
 func (d testDevice) WriteAt(int, int, []byte) error { return nil }
 func (d testDevice) EraseBlock(int) error           { return nil }

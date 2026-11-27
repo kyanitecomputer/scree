@@ -117,3 +117,36 @@ func TestNORTearAfterWrites(t *testing.T) {
 		t.Fatalf("WriteAt(after clear) error = %v", err)
 	}
 }
+
+func TestNORProgramsAwayFromEraseValue(t *testing.T) {
+	geometry := testGeometry()
+	geometry.EraseValue = 0x00
+	nor, err := NewNOR(geometry)
+	if err != nil {
+		t.Fatalf("NewNOR() error = %v", err)
+	}
+	first := make([]byte, 256)
+	for i := range first {
+		first[i] = 0xf0
+	}
+	if _, err := nor.WriteAt(first, 0); err != nil {
+		t.Fatalf("WriteAt(first) error = %v", err)
+	}
+	if _, err := nor.WriteAt(make([]byte, 256), 0); !errors.Is(err, ErrNotErased) {
+		t.Fatalf("WriteAt(erased over programmed) error = %v, want %v", err, ErrNotErased)
+	}
+	second := make([]byte, 256)
+	for i := range second {
+		second[i] = 0xff
+	}
+	if _, err := nor.WriteAt(second, 0); err != nil {
+		t.Fatalf("WriteAt(second) error = %v", err)
+	}
+	got := make([]byte, 256)
+	if _, err := nor.ReadAt(got, 0); err != nil {
+		t.Fatalf("ReadAt() error = %v", err)
+	}
+	if got[0] != 0xff {
+		t.Fatalf("ReadAt()[0] = %#x, want 0xff", got[0])
+	}
+}
