@@ -4,13 +4,12 @@ import (
 	"errors"
 	"testing"
 
-	"src.kyanite.computer/scree/blkdev"
-	"src.kyanite.computer/scree/driver"
+	"src.kyanite.computer/scree/internal/testdev"
 	"src.kyanite.computer/scree/internal/testflash"
 )
 
 func TestPowerLossDuringAppendKeepsPriorEntries(t *testing.T) {
-	flash, dev := newFailureDevice(t)
+	flash, dev := testdev.New(t)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}
@@ -50,7 +49,7 @@ func TestPowerLossDuringAppendKeepsPriorEntries(t *testing.T) {
 }
 
 func TestTornAppendIsSkipped(t *testing.T) {
-	flash, dev := newFailureDevice(t)
+	flash, dev := testdev.New(t)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}
@@ -89,17 +88,4 @@ func TestTornAppendIsSkipped(t *testing.T) {
 			t.Fatalf("LoadEntry(%d) = %+v, %v, want %s", seq, entry, err, want)
 		}
 	}
-}
-
-func newFailureDevice(t *testing.T) (*testflash.NOR, blkdev.BlockDevice) {
-	t.Helper()
-	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0xff})
-	if err != nil {
-		t.Fatalf("testflash.NewNOR() error = %v", err)
-	}
-	dev, err := blkdev.NewNOR(flash)
-	if err != nil {
-		t.Fatalf("blkdev.NewNOR() error = %v", err)
-	}
-	return flash, dev
 }

@@ -4,13 +4,11 @@ import (
 	"errors"
 	"testing"
 
-	"src.kyanite.computer/scree/blkdev"
-	"src.kyanite.computer/scree/driver"
-	"src.kyanite.computer/scree/internal/testflash"
+	"src.kyanite.computer/scree/internal/testdev"
 )
 
 func TestVerifyDetectsSuperblockCorruption(t *testing.T) {
-	flash, dev := newCorruptibleDevice(t)
+	flash, dev := testdev.New(t)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}
@@ -30,7 +28,7 @@ func TestVerifyDetectsSuperblockCorruption(t *testing.T) {
 }
 
 func TestVerifyData(t *testing.T) {
-	_, dev := newCorruptibleDevice(t)
+	_, dev := testdev.New(t)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}
@@ -47,21 +45,8 @@ func TestVerifyData(t *testing.T) {
 	}
 }
 
-func newCorruptibleDevice(t *testing.T) (*testflash.NOR, blkdev.BlockDevice) {
-	t.Helper()
-	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0xff})
-	if err != nil {
-		t.Fatalf("testflash.NewNOR() error = %v", err)
-	}
-	dev, err := blkdev.NewNOR(flash)
-	if err != nil {
-		t.Fatalf("blkdev.NewNOR() error = %v", err)
-	}
-	return flash, dev
-}
-
 func TestVerifyDetectsJournalCorruption(t *testing.T) {
-	flash, dev := newCorruptibleDevice(t)
+	flash, dev := testdev.New(t)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}
@@ -86,7 +71,7 @@ func TestVerifyDetectsJournalCorruption(t *testing.T) {
 }
 
 func TestVerifyDetectsProgrammedUnitAfterEnd(t *testing.T) {
-	flash, dev := newCorruptibleDevice(t)
+	flash, dev := testdev.New(t)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}

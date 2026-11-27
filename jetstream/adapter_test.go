@@ -13,8 +13,7 @@ import (
 
 	"src.kyanite.computer/scree"
 	"src.kyanite.computer/scree/blkdev"
-	"src.kyanite.computer/scree/driver"
-	"src.kyanite.computer/scree/internal/testflash"
+	"src.kyanite.computer/scree/internal/testdev"
 )
 
 func TestStreamStoreStoreLoad(t *testing.T) {
@@ -103,14 +102,7 @@ func newTestStreamStore(t *testing.T) *streamStore {
 
 func newTestDevice(t *testing.T) blkdev.BlockDevice {
 	t.Helper()
-	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0xff})
-	if err != nil {
-		t.Fatalf("testflash.NewNOR() error = %v", err)
-	}
-	dev, err := blkdev.NewNOR(flash)
-	if err != nil {
-		t.Fatalf("blkdev.NewNOR() error = %v", err)
-	}
+	_, dev := testdev.New(t)
 	return dev
 }
 

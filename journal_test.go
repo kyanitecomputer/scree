@@ -4,9 +4,7 @@ import (
 	"hash/crc32"
 	"testing"
 
-	"src.kyanite.computer/scree/blkdev"
-	"src.kyanite.computer/scree/driver"
-	"src.kyanite.computer/scree/internal/testflash"
+	"src.kyanite.computer/scree/internal/testdev"
 )
 
 func TestJournalAppendReplay(t *testing.T) {
@@ -71,14 +69,9 @@ func TestJournalSkipsCorruptEntry(t *testing.T) {
 }
 
 func TestJournalUsesEraseValue(t *testing.T) {
-	flash, err := testflash.NewNOR(driver.Geometry{TotalSize: 16 * 4096, EraseBlockSize: 4096, PageSize: 256, EraseValue: 0x00})
-	if err != nil {
-		t.Fatalf("testflash.NewNOR() error = %v", err)
-	}
-	dev, err := blkdev.NewNOR(flash)
-	if err != nil {
-		t.Fatalf("blkdev.NewNOR() error = %v", err)
-	}
+	geometry := testdev.Geometry
+	geometry.EraseValue = 0x00
+	_, dev := testdev.NewGeometry(t, geometry)
 	if err := Format(dev, FormatOptions{}); err != nil {
 		t.Fatalf("Format() error = %v", err)
 	}
