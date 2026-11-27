@@ -14,6 +14,7 @@ const (
 	journalTypeEntryRemove        = uint16(6)
 	journalTypeNamespacePurge     = uint16(7)
 	journalTypeNamespacePurgeUpTo = uint16(8)
+	journalTypeSetLastSequence    = uint16(9)
 )
 
 // entryHeaderSize is the size of an entry record before its subject: the
@@ -56,6 +57,9 @@ func (s *Store) Append(ns NamespaceID, entry *Entry) (uint64, error) {
 	}
 	if err := s.checkNamespace(ns); err != nil {
 		return 0, err
+	}
+	if s.logs[ns].lastSeq() == math.MaxUint64 {
+		return 0, fmt.Errorf("%w: sequences of namespace %d exhausted", ErrNoSpace, ns)
 	}
 	seq := s.logs[ns].lastSeq() + 1
 	ts := entry.Timestamp
@@ -192,6 +196,28 @@ func (s *Store) PurgeUpTo(ns NamespaceID, seq uint64) (uint64, error) {
 	return s.logs[ns].removeUpTo(seq), nil
 }
 
+// SetLastSequence makes seq the last sequence of a namespace, so that the
+// next entry gets seq+1. Entries after seq are removed, and their sequences
+// are assigned again; it returns how many it removed.
+func (s *Store) SetLastSequence(ns NamespaceID, seq uint64) (uint64, error) {
+	if s.readOnly {
+		return 0, ErrReadOnly
+	}
+	if err := s.checkNamespace(ns); err != nil {
+		return 0, err
+	}
+	if s.logs[ns].lastSeq() == seq {
+		return 0, nil
+	}
+	data := make([]byte, 16)
+	binary.LittleEndian.PutUint64(data, uint64(ns))
+	binary.LittleEndian.PutUint64(data[8:], seq)
+	if err := s.journal.append(journalEntry{Type: journalTypeSetLastSequence, Data: data}); err != nil {
+		return 0, err
+	}
+	return s.logFor(ns).setLast(seq), nil
+}
+
 // Sync commits pending writes to the underlying block device.
 func (s *Store) Sync() error {
 	return s.dev.Sync()
@@ -256,6 +282,11 @@ func (s *Store) applyRecord(entry journalEntry) error {
 			return ErrCorrupt
 		}
 		s.logs[NamespaceID(binary.LittleEndian.Uint64(entry.Data))].removeUpTo(math.MaxUint64)
+	case journalTypeSetLastSequence:
+		if len(entry.Data) < 16 {
+			return ErrCorrupt
+		}
+		s.logFor(NamespaceID(binary.LittleEndian.Uint64(entry.Data))).setLast(binary.LittleEndian.Uint64(entry.Data[8:]))
 	case journalTypeNamespacePurgeUpTo:
 		if len(entry.Data) < 16 {
 			return ErrCorrupt
@@ -268,12 +299,17 @@ func (s *Store) applyRecord(entry journalEntry) error {
 }
 
 func (s *Store) applyEntry(record entryRecord) {
-	log := s.logs[record.Namespace]
+	s.logFor(record.Namespace).add(record.StoredEntry)
+}
+
+// logFor returns the entry log of ns, which it creates if needed.
+func (s *Store) logFor(ns NamespaceID) *entryLog {
+	log := s.logs[ns]
 	if log == nil {
 		log = newEntryLog()
-		s.logs[record.Namespace] = log
+		s.logs[ns] = log
 	}
-	log.add(record.StoredEntry)
+	return log
 }
 
 func encodeEntryRecord(record entryRecord) ([]byte, error) {

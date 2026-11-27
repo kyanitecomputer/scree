@@ -90,6 +90,23 @@ func (l *entryLog) removeUpTo(seq uint64) uint64 {
 	return n
 }
 
+// setLast removes the entries after seq, makes seq the last sequence and
+// returns how many entries it removed.
+func (l *entryLog) setLast(seq uint64) uint64 {
+	var n uint64
+	for cur := range l.entries {
+		if cur > seq {
+			delete(l.entries, cur)
+			n++
+		}
+	}
+	l.last = seq
+	if l.first > seq {
+		l.first = 0
+	}
+	return n
+}
+
 // findFirst sets first to the lowest live sequence from seq on. It walks the
 // sequences while they are about as many as the entries, and else the entries.
 func (l *entryLog) findFirst(seq uint64) {

@@ -27,6 +27,7 @@ Part of the [Kyanite](https://github.com/kyanitecomputer) stack.
   - remove one entry
   - purge a namespace
   - purge entries up to a sequence
+  - set the last sequence, which skips sequences ahead or truncates the entries after it
   - persist removals and purges across remounts
 - Stores namespace metadata with put/get/delete operations.
 - Supports read-only mounts that reject write operations.
